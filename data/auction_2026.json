@@ -1,0 +1,226 @@
+{
+ "_comment": "The 2026 auction, held 2 September 2026. Frozen. Every owner's $250 buy-in stands whether or not they spent it; unspent budget is forfeited to the pot under the full-spend rule.",
+ "season": 2026,
+ "pot_cents": 250000,
+ "buy_in_cents": 25000,
+ "spend_cents": 233600,
+ "forfeited_cents": 16400,
+ "owners": [
+  "Riggs",
+  "Matt",
+  "Peter",
+  "Doug",
+  "Sam",
+  "John",
+  "Paul",
+  "Ben",
+  "Sean",
+  "Nolan"
+ ],
+ "spent_cents": {
+  "Riggs": 20500,
+  "Matt": 25000,
+  "Peter": 23000,
+  "Doug": 25000,
+  "Sam": 24500,
+  "John": 25000,
+  "Paul": 20500,
+  "Ben": 25000,
+  "Sean": 22800,
+  "Nolan": 22300
+ },
+ "teams": [
+  {
+   "team": "Buffalo Bills",
+   "abbr": "BUF",
+   "price_cents": 15000,
+   "owner": "Nolan"
+  },
+  {
+   "team": "Miami Dolphins",
+   "abbr": "MIA",
+   "price_cents": 4600,
+   "owner": "Matt"
+  },
+  {
+   "team": "New England Patriots",
+   "abbr": "NE",
+   "price_cents": 12000,
+   "owner": "Peter"
+  },
+  {
+   "team": "New York Jets",
+   "abbr": "NYJ",
+   "price_cents": 5000,
+   "owner": "Riggs"
+  },
+  {
+   "team": "Baltimore Ravens",
+   "abbr": "BAL",
+   "price_cents": 12000,
+   "owner": "Sam"
+  },
+  {
+   "team": "Cincinnati Bengals",
+   "abbr": "CIN",
+   "price_cents": 6000,
+   "owner": "Sam"
+  },
+  {
+   "team": "Cleveland Browns",
+   "abbr": "CLE",
+   "price_cents": 4700,
+   "owner": "Peter"
+  },
+  {
+   "team": "Pittsburgh Steelers",
+   "abbr": "PIT",
+   "price_cents": 7500,
+   "owner": "Paul"
+  },
+  {
+   "team": "Houston Texans",
+   "abbr": "HOU",
+   "price_cents": 8600,
+   "owner": "Doug"
+  },
+  {
+   "team": "Indianapolis Colts",
+   "abbr": "IND",
+   "price_cents": 6900,
+   "owner": "Matt"
+  },
+  {
+   "team": "Jacksonville Jaguars",
+   "abbr": "JAX",
+   "price_cents": 4500,
+   "owner": "Sean"
+  },
+  {
+   "team": "Tennessee Titans",
+   "abbr": "TEN",
+   "price_cents": 6500,
+   "owner": "Ben"
+  },
+  {
+   "team": "Denver Broncos",
+   "abbr": "DEN",
+   "price_cents": 6500,
+   "owner": "Sean"
+  },
+  {
+   "team": "Kansas City Chiefs",
+   "abbr": "KC",
+   "price_cents": 10000,
+   "owner": "Doug"
+  },
+  {
+   "team": "Las Vegas Raiders",
+   "abbr": "LV",
+   "price_cents": 6400,
+   "owner": "Doug"
+  },
+  {
+   "team": "Los Angeles Chargers",
+   "abbr": "LAC",
+   "price_cents": 6300,
+   "owner": "Peter"
+  },
+  {
+   "team": "Dallas Cowboys",
+   "abbr": "DAL",
+   "price_cents": 6500,
+   "owner": "Paul"
+  },
+  {
+   "team": "New York Giants",
+   "abbr": "NYG",
+   "price_cents": 6000,
+   "owner": "Ben"
+  },
+  {
+   "team": "Philadelphia Eagles",
+   "abbr": "PHI",
+   "price_cents": 7000,
+   "owner": "Riggs"
+  },
+  {
+   "team": "Washington Commanders",
+   "abbr": "WAS",
+   "price_cents": 5500,
+   "owner": "Matt"
+  },
+  {
+   "team": "Chicago Bears",
+   "abbr": "CHI",
+   "price_cents": 6500,
+   "owner": "Sam"
+  },
+  {
+   "team": "Detroit Lions",
+   "abbr": "DET",
+   "price_cents": 7000,
+   "owner": "Sean"
+  },
+  {
+   "team": "Green Bay Packers",
+   "abbr": "GB",
+   "price_cents": 8000,
+   "owner": "Matt"
+  },
+  {
+   "team": "Minnesota Vikings",
+   "abbr": "MIN",
+   "price_cents": 6200,
+   "owner": "John"
+  },
+  {
+   "team": "Atlanta Falcons",
+   "abbr": "ATL",
+   "price_cents": 4000,
+   "owner": "Riggs"
+  },
+  {
+   "team": "Carolina Panthers",
+   "abbr": "CAR",
+   "price_cents": 4500,
+   "owner": "Riggs"
+  },
+  {
+   "team": "New Orleans Saints",
+   "abbr": "NO",
+   "price_cents": 7300,
+   "owner": "Nolan"
+  },
+  {
+   "team": "Tampa Bay Buccaneers",
+   "abbr": "TB",
+   "price_cents": 8300,
+   "owner": "John"
+  },
+  {
+   "team": "Arizona Cardinals",
+   "abbr": "ARI",
+   "price_cents": 4800,
+   "owner": "Sean"
+  },
+  {
+   "team": "Los Angeles Rams",
+   "abbr": "LAR",
+   "price_cents": 10500,
+   "owner": "John"
+  },
+  {
+   "team": "San Francisco 49ers",
+   "abbr": "SF",
+   "price_cents": 6500,
+   "owner": "Paul"
+  },
+  {
+   "team": "Seattle Seahawks",
+   "abbr": "SEA",
+   "price_cents": 12500,
+   "owner": "Ben"
+  }
+ ]
+}
