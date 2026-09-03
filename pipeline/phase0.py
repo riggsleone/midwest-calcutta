@@ -9,7 +9,6 @@ from fetch import fetch_pbp
 SEASON = int(sys.argv[1]) if len(sys.argv) > 1 else 2025
 WEEK   = int(sys.argv[2]) if len(sys.argv) > 2 else 5
 
-import league
 _auction, PRICES, OWNERS = league.load()
 
 print(f"PHASE 0  |  {SEASON} Week {WEEK}\n" + "="*64)
@@ -51,10 +50,11 @@ for name in prizes.WEEKLY:
     if a is None:
         print(f"{name:<22}{'carried':<10}no winner this week, money rolls forward")
         continue
-    w = a["winners"][0]
-    who = ", ".join(f"{x['team']} ({x['owner']})" for x in a["winners"])
-    print(f"{name:<22}{'OK':<10}{who}  ${a['amount']/100:.2f}")
-    print(f"{'':32}{w['detail']}")
+    n = len(a["winners"])
+    head = f"${a['amount']/100:.2f}" + (f"  shared {n} ways" if n > 1 else "")
+    print(f"{name:<22}{'OK':<10}{head}")
+    for x in a["winners"]:                       # every winner, and why
+        print(f"{'':32}{x['team']:<4} {x['owner']:<7} ${x['amount']/100:>6.2f}  {x['detail']}")
 
 errs = validate.check_awards(awards) + validate.check_league(
     sorted(PRICES), OWNERS, PRICES)
@@ -63,7 +63,9 @@ print("VALIDATION:", "all checks pass" if not errs else "FAILURES")
 for e in errs: print("  !", e)
 
 auto = len(got)
-print(f"\nRESULT: {auto} of 7 weekly prizes decided from real data.")
+paid = sum(a["amount"] for a in awards)
+print(f"\nWeek {WEEK} paid ${paid/100:.2f} across {sum(len(a['winners']) for a in awards)} winning teams.")
+print(f"RESULT: {auto} of 7 weekly prizes decided from real data.")
 print("Longest TD:", "AUTOMATED" if "Longest TD" in got else "FAILED")
 print("Most Field Goals:", "AUTOMATED" if "Most Field Goals" in got else "FAILED")
 json.dump({"season":SEASON,"week":WEEK,"source":url,"games":len(wk),
