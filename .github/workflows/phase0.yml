@@ -1,0 +1,29 @@
+name: Phase 0 - prove the data
+on:
+  workflow_dispatch:
+    inputs:
+      season: {description: "Season", default: "2025", required: true}
+      week:   {description: "Week",   default: "5",    required: true}
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Run Phase 0
+        run: |
+          cd pipeline
+          python phase0.py "${{ inputs.season }}" "${{ inputs.week }}" | tee report.txt
+      - name: Put the report in the run summary
+        if: always()
+        run: |
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat pipeline/report.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase0-results
+          path: pipeline/phase0_*.json
