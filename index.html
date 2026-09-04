@@ -601,8 +601,10 @@ function postRound(r, live){
   <b>${money(T['22'])}</b> to the runner-up, <b>${money(T['21'])}</b> to each conference loser,
   <b>${money(T['20'])}</b> to each divisional loser and <b>${money(T['19'])}</b> to each wild card
   loser. That is the ${money(DATA.postPool)} postseason pool${DATA.postRolled
-    ? `, which includes <b>${money(DATA.postRolled)}</b> rolled in from novelty prizes that were never
-       triggered by the end of Week 18 and now pay on these same percentages`
+    ? `, which includes <b>${money(DATA.postRolled)}</b> swept in at the end of Week 18: ${[
+        DATA.postFromNovelty ? `${money(DATA.postFromNovelty)} of novelty prizes that were never triggered` : '',
+        DATA.postFromWeekly ? `${money(DATA.postFromWeekly)} of weekly prize money that could not be awarded` : ''
+      ].filter(Boolean).join(' and ')}. It pays on these same percentages rather than going unclaimed`
     : ', forty per cent of the whole pot'}.</div>`;
 }
 
@@ -881,8 +883,9 @@ function adopt(board, first){
       + `${money(T.champion)} to the champion, ${money(T['22'])} to the runner-up, `
       + `${money(T['21'])} to each conference loser, ${money(T['20'])} to each divisional loser, `
       + `${money(T['19'])} to each wild card loser.`
-      + (board.postRolled ? ` The pool grew by ${money(board.postRolled)} because that much novelty
-         prize money was never triggered by the end of Week 18.` : ''),
+      + (board.postRolled ? ` The pool grew by ${money(board.postRolled)} at the end of Week 18,
+         because that much prize money could not be awarded where it started and the rules send it
+         here rather than letting it go unclaimed.` : ''),
     'A round pays only once every game in it is final. No ties are possible, so nothing splits.'];
 
   drawHeader();
