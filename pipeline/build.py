@@ -337,7 +337,14 @@ def quiet(sched, prev):
     done = [w for w, st in sched["weeks"].items() if st["complete"]]
     if (max(done) if done else 0) > prev.get("throughWeek", 0): return False
     nxt = sched["weeks"].get(prev.get("throughWeek", 0) + 1)
-    return not (nxt and nxt["started"])
+    if nxt and nxt["started"]: return False
+    # The front of the page shows the next kickoff, so a kickoff that has moved
+    # or that the stored board never had is reason enough to rebuild. A kickoff
+    # only passes when a game starts, and a started game means the week is
+    # live, which is already not quiet. So this costs no extra runs.
+    kick = (sched["nextKick"].strftime("%Y-%m-%dT%H:%M:%SZ")
+            if sched.get("nextKick") else None)
+    return kick == prev.get("nextKick")
 
 
 def main():
