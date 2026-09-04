@@ -208,6 +208,8 @@ th.s[data-on="1"]{color:var(--acc);}
 .bootmsg p{margin:0 0 8px;font-size:13px;color:var(--dim);line-height:1.5;}
 .bootmsg p.q{color:var(--faint);font-size:12px;}
 .bootmsg code{font-family:var(--mono);font-size:11.5px;color:var(--tx);}
+/* room for a two-character place like T4 without crowding the name */
+.row .rank{width:21px;}
 .spin{width:22px;height:22px;border-radius:50%;border:2px solid var(--line);
   border-top-color:var(--acc);margin:0 auto 14px;animation:sp .8s linear infinite;}
 @keyframes sp{to{transform:rotate(360deg);}}
@@ -284,7 +286,7 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 document.documentElement.setAttribute('data-theme','light');   // locked
 
 /* ---------------------------------------------------------------- globals */
-let DATA = null, LIVE = null, PRE = false, TEAM = {}, OWNERS = [], M = {};
+let DATA = null, LIVE = null, PRE = false, ZERO = true, TEAM = {}, OWNERS = [], M = {};
 
 const state = {
   tab: 'stand',
@@ -325,6 +327,18 @@ function winnerLines(l, showAmt){
 }
 
 /* ---------------------------------------------------------------- header */
+/* the next kickoff, in the reader's own time zone */
+function kickText(iso){
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const day = d.toLocaleDateString('en-US',{weekday:'long', month:'short', day:'numeric'});
+  let h = d.getHours();
+  const m = String(d.getMinutes()).padStart(2,'0');
+  const ap = h < 12 ? 'a' : 'p';
+  h = h % 12 || 12;
+  return `${day}, ${h}:${m}${ap}`;
+}
+
 function stampTime(iso){
   const d = new Date(iso);
   if (isNaN(d)) return '';
@@ -347,7 +361,7 @@ function drawHeader(){
   }
 
   $('#stamp').innerHTML = PRE
-    ? `Season starts<br>Week 1`
+    ? (DATA.nextKick ? `Week 1 kicks off<br>${kickText(DATA.nextKick)}` : `Season starts<br>Week 1`)
     : (DATA.isLive && LIVE)
     ? `<span style="color:var(--live);font-weight:600">Week ${LIVE.week} live</span><br>Updated ${stampTime(DATA.generated)}`
     : `Through Week ${DATA.throughWeek}<br>Updated ${stampTime(DATA.generated)}`;
@@ -364,15 +378,30 @@ function drawHeader(){
 
 /* ---------------------------------------------------------------- standings */
 function standings(){
-  const rows = [...DATA.owners].sort(PRE
+  const rows = [...DATA.owners].sort(ZERO
     ? (a,b)=>a.name.localeCompare(b.name)     // nobody leads yet
     : (a,b)=>b.won-a.won || a.name.localeCompare(b.name));
+
+  /* Standard competition ranking, the way every sport does it: everyone level
+     shares the same place and the next place skips over them. Four owners tied
+     on the same money are all 4th, and the next owner is 8th, not 5th. Early
+     in the season, when a week only moves $38 around, ties will be common. */
+  const place = [];
+  let cur = 0, prev = null;
+  rows.forEach((o, i) => {
+    if (o.won !== prev) { cur = i + 1; prev = o.won; }
+    place.push(cur);
+  });
+  const shared = {};
+  place.forEach(v => shared[v] = (shared[v] || 0) + 1);
+  const rankText = i => shared[place[i]] > 1 ? 'T' + place[i] : String(place[i]);
+
   return `
   <div class="sec"><h2>Standings</h2><span class="note">${PRE ? "Before Week 1" : "Through Week "+DATA.throughWeek}</span></div>
   <div class="list">` + rows.map((o,i)=>{
     const pct = Math.round(o.won / M.buyIn * 100);
     return `<button class="row" data-goowner="${esc(o.name)}">
-      <span class="rank">${PRE ? '' : i+1}</span>
+      <span class="rank">${ZERO ? '' : rankText(i)}</span>
       <span class="main">
         <span class="nm">${esc(o.name)}</span>
         ${chipsFor(o.teams)}
@@ -381,7 +410,7 @@ function standings(){
       <span class="amt g">${money(o.won)}<small>${pct}% of buy-in</small></span>
     </button>`;
   }).join('') + `</div>
-  <div class="foot">${PRE ? 'Listed alphabetically, because nobody has won anything yet. Once Week 1 is final this ranks on winnings to date (John Math).' : 'Ranked on winnings to date (John Math).'} The buy-in shows as the share recovered rather than a net total. <b>The full net settlement appears once, after the Super Bowl.</b></div>`;
+  <div class="foot">${ZERO ? 'Listed alphabetically, because nobody has won anything yet. Once the first week is final this ranks on winnings to date (John Math).' : 'Ranked on winnings to date (John Math). A <b>T</b> means level on the money, and everyone level shares the place.'} The buy-in shows as the share recovered rather than a net total. <b>The full net settlement appears once, after the Super Bowl.</b></div>`;
 }
 
 /* ---------------------------------------------------------------- owner */
@@ -399,7 +428,7 @@ function ownerPanel(){
                 ['novelty','Novelty','#9B7BD4'],
                 ['post',  'Postseason','#4C5A66']];
   const tot = Math.max(1,o.won);
-  const order = [...DATA.owners].sort(PRE
+  const order = [...DATA.owners].sort(ZERO
     ? (a,b)=>a.name.localeCompare(b.name)
     : (a,b)=>b.won-a.won || a.name.localeCompare(b.name));
 
@@ -448,7 +477,8 @@ function ownerPanel(){
 function weekPanel(){
   if (PRE) return `
     <div class="sec"><h2>This week</h2><span class="note">Week 1</span></div>
-    <div class="list"><div class="empty">Week 1 has not kicked off.<br>
+    <div class="list"><div class="empty">${DATA.nextKick
+      ? `Week 1 kicks off ${esc(kickText(DATA.nextKick))}.` : 'Week 1 has not kicked off.'}<br>
       Seven prizes go live the moment it does.</div></div>
     <div class="foot">Once games start, this page shows the current leader for each of the seven weekly prizes and updates as results come in. Nothing is paid until every game in the week is final.</div>`;
 
@@ -471,12 +501,12 @@ function weekPanel(){
   <div class="list">${LIVE.prizes.map(p=>`
     <div class="row"><span class="main">
       <span class="nm" style="font-size:13.5px">${esc(p.prize)}
-        <span style="color:var(--live);font-weight:600;font-size:10px;letter-spacing:.05em">LEADING</span></span>
+        <span style="color:${p.carry?'var(--faint)':'var(--live)'};font-weight:600;font-size:10px;letter-spacing:.05em">${p.carry?'CARRIES':'LEADING'}</span></span>
       ${p.leaders.length>1?`<span class="shared">Tied ${p.leaders.length} ways, ${money(Math.floor(p.amount/p.leaders.length))} each</span>`:''}
       ${p.leaders.length ? p.leaders.map(x=>`<span class="wl">${chipHTML(x.abbr)}
           <b>${esc(x.owner)}</b><span>${esc(x.why)}</span></span>`).join('')
-        : '<span class="sub">Nothing qualifies yet</span>'}</span>
-      <span class="amt" style="color:var(--live)">${money(p.amount)}<small>not yet paid</small></span></div>`).join('')}
+        : `<span class="sub">${p.note ? esc(p.note) : 'Nothing qualifies yet'}</span>`}</span>
+      <span class="amt" style="color:${p.carry?'var(--faint)':'var(--live)'}">${money(p.amount)}<small>${p.carry?'carries forward':'not yet paid'}</small></span></div>`).join('')}
     <div class="row"><span class="main"><span class="nm" style="font-size:13px;color:var(--dim)">Win bounty so far</span>
       <span class="sub">${money(100)} per win, ${LIVE.gamesFinal} games final</span></span>
       <span class="amt" style="color:var(--live)">${money(LIVE.bounty)}</span></div></div>
@@ -745,15 +775,20 @@ async function fetchBoard(){
 function adopt(board, first){
   DATA = board;
   LIVE = board.liveWeek || null;
-  PRE  = board.throughWeek === 0;
   M    = board.meta;
+  /* PRE: the season has not started at all. Week 1 Thursday night is week 0
+     AND live at the same time, so throughWeek alone is not the test.
+     ZERO: games have been played but nobody has won anything yet, which is
+     only about how the standings are ordered. */
+  PRE  = board.throughWeek === 0 && !board.isLive;
+  ZERO = M.awarded === 0;
   TEAM = Object.fromEntries(board.teams.map(t=>[t.abbr,t]));
   OWNERS = board.owners.map(o=>o.name);
 
   if (first || !OWNERS.includes(state.me)){
     /* Owner tab opens on whoever leads. No saved preference: one tap changes
        it, and nothing sticks to the wrong person. */
-    state.me = PRE
+    state.me = ZERO
       ? [...board.owners].sort((a,b)=>a.name.localeCompare(b.name))[0].name
       : [...board.owners].sort((a,b)=>b.won-a.won)[0].name;
   }
