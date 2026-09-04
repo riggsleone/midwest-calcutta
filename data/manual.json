@@ -2,14 +2,24 @@
   "_how_to_use_this_file": [
     "Two prizes cannot be read off a scoreboard, so they are typed in here.",
     "Add one object to 'entries' when a prize is triggered, then commit.",
+    "",
     "type    must be exactly 'The Pink Slip' or 'QB Down'.",
     "team    the three-letter abbreviation, for example NYJ, KC, GB, LV.",
+    "date    YYYY-MM-DD, the day it happened. The FIRST one wins the prize",
+    "        outright, and only entries on the same date split it.",
     "week    the week it happened, a whole number from 1 to 18.",
     "status  'confirmed' pays it. 'proposed' records it without paying.",
     "detail  one short sentence. It shows on the page under the prize.",
-    "The build refuses to run if anything here is wrong, and says what.",
+    "",
+    "The build checks every entry and refuses to write if anything is wrong.",
     "Example of a finished entry, to copy into the empty list below:",
-    "{ \"type\": \"The Pink Slip\", \"team\": \"NYJ\", \"week\": 6, \"status\": \"confirmed\", \"detail\": \"Head coach dismissed on the Monday after Week 6\" }"
+    "{ \"type\": \"The Pink Slip\", \"team\": \"NYJ\", \"date\": \"2026-10-13\", \"week\": 6, \"status\": \"confirmed\", \"detail\": \"Head coach dismissed on the Monday after Week 6\" }",
+    "",
+    "void_games is for a game that is cancelled and will never be played.",
+    "Without it that week never counts as finished and every prize after it",
+    "would freeze for the rest of the season. Put the game id in the list,",
+    "for example \"2026_07_BUF_CIN\". Leave it empty unless it happens."
   ],
-  "entries": []
+  "entries": [],
+  "void_games": []
 }
