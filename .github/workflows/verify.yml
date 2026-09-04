@@ -1,0 +1,31 @@
+name: Check the rules
+
+on:
+  workflow_dispatch:
+    inputs:
+      season:
+        description: "Season to test against"
+        default: "2025"
+        required: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+
+      - name: Check every rule
+        shell: bash
+        run: |
+          set -o pipefail
+          cd pipeline
+          python verify.py "${{ inputs.season || '2025' }}" 2>&1 | tee verify_report.txt
+
+      - name: Show the report
+        if: always()
+        run: |
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat pipeline/verify_report.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
