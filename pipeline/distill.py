@@ -14,6 +14,17 @@ COLS = ["game_id","season","week","season_type","home_team","away_team",
         "yards_gained","return_yards","field_goal_result","kick_distance",
         "home_score","away_score"]
 
+# nflverse has used a few different abbreviations over the years, and a
+# mismatch here would silently pay the wrong owner (or nobody) all season.
+# Map every known variant onto the abbreviations used in the auction file.
+ALIAS = {"LA":"LAR", "STL":"LAR", "SL":"LAR", "SD":"LAC", "OAK":"LV",
+         "WSH":"WAS", "ARZ":"ARI", "BLT":"BAL", "CLV":"CLE", "HST":"HOU",
+         "JAC":"JAX", "LVR":"LV", "KAN":"KC", "NWE":"NE", "NOR":"NO",
+         "SFO":"SF", "TAM":"TB", "GNB":"GB"}
+def team(a):
+    a = (a or "").strip().upper()
+    return ALIAS.get(a, a)
+
 def _num(v, d=0.0):
     try:
         if v in ("", "NA", None): return d
@@ -41,7 +52,7 @@ def distill(rows, season_type="REG"):
                 "game_id": gid,
                 "season": int(_num(r.get("season"))),
                 "week": int(_num(r.get("week"))),
-                "home": r.get("home_team"), "away": r.get("away_team"),
+                "home": team(r.get("home_team")), "away": team(r.get("away_team")),
                 "home_score": 0, "away_score": 0,
                 "fg": defaultdict(int), "fg_yards": defaultdict(int),
                 "long_td": defaultdict(int),
@@ -56,13 +67,14 @@ def distill(rows, season_type="REG"):
 
         # made field goals, credited to the kicking (possessing) team
         if r.get("field_goal_result") == "made" and r.get("posteam"):
-            g["fg"][r["posteam"]] += 1
-            g["fg_yards"][r["posteam"]] += int(_num(r.get("kick_distance")))
+            pt = team(r["posteam"])
+            g["fg"][pt] += 1
+            g["fg_yards"][pt] += int(_num(r.get("kick_distance")))
 
         # longest touchdown, any type, credited to td_team
         if _num(r.get("touchdown")) == 1 and r.get("td_team"):
             y = _td_yards(r)
-            t = r["td_team"]
+            t = team(r["td_team"])
             if y > g["long_td"][t]: g["long_td"][t] = y
 
     out = []
