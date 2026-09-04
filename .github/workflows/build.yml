@@ -1,11 +1,28 @@
 name: Build the board
+
 on:
+  # Every twenty minutes. The job checks the schedule first, which is small,
+  # and stops right there unless a game is in progress or a week has just
+  # finished. So most of these runs cost a few seconds and change nothing.
+  schedule:
+    - cron: "*/20 * * * *"
   workflow_dispatch:
     inputs:
-      season: {description: "Season", default: "2026", required: true}
+      season:
+        description: "Season"
+        default: "2026"
+        required: true
+      force:
+        description: "Allow a settled week to change (only after reviewing why)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+
+concurrency:
+  group: build-the-board
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -17,10 +34,12 @@ jobs:
 
       - name: Build board.json
         shell: bash
+        env:
+          CALCUTTA_FORCE: ${{ inputs.force == true && '1' || '0' }}
         run: |
           set -o pipefail
           cd pipeline
-          python build.py "${{ inputs.season }}" 2>&1 | tee build_report.txt
+          python build.py "${{ inputs.season || '2026' }}" 2>&1 | tee build_report.txt
 
       - name: Show the report
         if: always()
@@ -37,6 +56,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "nothing changed"
           else
-            git commit -m "board: season ${{ inputs.season }} refresh"
+            git commit -m "board: season ${{ inputs.season || '2026' }} refresh"
             git push
           fi
