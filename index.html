@@ -212,6 +212,16 @@ th.s[data-on="1"]{color:var(--acc);}
 .row .rank{width:21px;}
 /* a playoff round is named, not numbered, so its tag needs a little more room */
 .row .rank.wide{width:30px;font-size:9.5px;letter-spacing:.02em;font-weight:600;}
+/* ---------------------------------------------------------------- stinker */
+/* No dimming and no card. The gif is transparent, so it sits on top of the
+   page and everything behind it stays readable. The full-screen layer is
+   invisible and exists only to catch a tap anywhere to skip. The shadow is a
+   drop-shadow, so it follows the shape of the egg rather than drawing a box. */
+.stink{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;
+  background:transparent;opacity:0;transition:opacity .25s ease;cursor:pointer;padding:20px;}
+.stink.on{opacity:1;}
+.stink img{width:min(72vw,300px);height:auto;display:block;
+  filter:drop-shadow(0 5px 12px rgba(10,14,18,.30));}
 .spin{width:22px;height:22px;border-radius:50%;border:2px solid var(--line);
   border-top-color:var(--acc);margin:0 auto 14px;animation:sp .8s linear infinite;}
 @keyframes sp{to{transform:rotate(360deg);}}
@@ -778,6 +788,114 @@ function teamPanel(){
   <div class="foot">Per $ is dollars won for every dollar paid at auction. <b>It will be the most argued-about number in the league.</b> ${money(M.forfeited)} of the ${money(M.pot)} went unspent at auction and was forfeited to the pot under the full-spend rule, which is why the prices only add to ${money(M.auctionSpend)}.</div>`;
 }
 
+
+/* ---------------------------------------------------------------- stinker */
+/* Whoever won Stinker of the Week in the most recently settled week is the
+   reigning stinker until the next week settles, so the window is a whole week
+   rather than the gap between the last final and the next kickoff. Landing on
+   their page plays the gif, once a day, per stinker: a two-way tie pays off on
+   both pages. Derived fresh from the board every time, so it hands over by
+   itself the moment a new week is paid.
+
+   The gif runs exactly 6,670ms and loops forever. Dismissing at the very end
+   races the restart and catches a frame of it starting over, so it fades out
+   at 6,200ms instead: the closing caption lands at 4,410ms and holds to the
+   end, so it has been readable for nearly two seconds by then. */
+const STINK_GIF  = 'stinker.gif';
+const STINK_MS   = 6200;
+const STINK_FADE = 250;
+const today = () => new Date().toLocaleDateString('en-CA');   // YYYY-MM-DD, local
+
+const stinkAwards = () => (DATA && DATA.ledger ? DATA.ledger : [])
+        .filter(x => x.prize === 'Stinker of the Week');
+
+/* Two rules, depending on where the season is.
+
+   Weeks 1 to 18: whoever won Stinker in the most recently settled week holds
+   it until the next week settles.
+
+   After Week 18: the playoff rounds settle as weeks 19 to 22 and have no
+   Stinker, so the weekly title has nobody to pass to. It becomes a season
+   award instead: whoever won Stinker the most times across the regular season
+   carries it through the playoffs. Level on the count and they all carry it,
+   the same as any other tie. */
+function stinkerSeason(){
+  const tally = {};
+  stinkAwards().forEach(l => {
+    // one credit per week won, even if two of an owner's teams tied for it
+    [...new Set(l.winners.map(w => w.owner).filter(Boolean))]
+      .forEach(o => tally[o] = (tally[o] || 0) + 1);
+  });
+  const counts = Object.values(tally);
+  if (!counts.length) return [];
+  const best = Math.max(...counts);
+  return Object.keys(tally).filter(o => tally[o] === best).sort();
+}
+
+function stinkerWeekly(){
+  const l = stinkAwards().sort((a, b) => b.week - a.week)[0];
+  return l ? [...new Set(l.winners.map(w => w.owner).filter(Boolean))] : [];
+}
+
+const stinkPost = () => !!(DATA && DATA.throughWeek > REG_WEEKS);
+
+function stinkerOwners(){
+  if (!DATA || !DATA.throughWeek) return [];
+  return stinkPost() ? stinkerSeason() : stinkerWeekly();
+}
+
+/* What the current title is keyed on, so the once-a-day memory resets whenever
+   the title changes hands: the week for a weekly stinker, and a separate key
+   for the season award, so the switch after Week 18 gets a fresh play. */
+function stinkerWeek(){
+  if (stinkPost()) return 'season';
+  const l = stinkAwards().sort((a, b) => b.week - a.week)[0];
+  return l ? l.week : 0;
+}
+
+let stinkTimer = null;
+function closeStinker(){
+  clearTimeout(stinkTimer);
+  const el = document.querySelector('.stink');
+  if (!el) return;
+  el.classList.remove('on');
+  setTimeout(() => el.remove(), STINK_FADE + 40);
+}
+function showStinker(){
+  closeStinker();
+  const wrap = document.createElement('div');
+  wrap.className = 'stink';
+  /* a fresh img element every time, so the animation starts at frame one
+     rather than resuming wherever the cached copy left off */
+  const img = new Image();
+  img.alt = '';
+  /* arm the clock when the picture is decoded and playing, not when the
+     element is made, so a slow connection does not cut the ending short */
+  const arm = () => { clearTimeout(stinkTimer);
+                      stinkTimer = setTimeout(closeStinker, STINK_MS); };
+  img.onload = arm;
+  img.src = STINK_GIF;
+  wrap.appendChild(img);
+  wrap.addEventListener('click', closeStinker);
+  document.body.appendChild(wrap);
+  requestAnimationFrame(() => wrap.classList.add('on'));
+  arm();                                   // in case it is already cached
+}
+function maybeStink(owner){
+  if (!owner || !stinkerOwners().includes(owner)) return;
+  const key = `stink:${stinkerWeek()}:${owner}`;
+  let seen = '';
+  try { seen = localStorage.getItem(key) || ''; } catch(e){}
+  if (seen === today()) return;                   // already had it today
+  try { localStorage.setItem(key, today()); } catch(e){}
+  showStinker();
+}
+/* Warm the cache once, so the first play is instant rather than a blank beat
+   while 130KB comes down. Only on weeks that actually have a stinker. */
+function primeStinker(){
+  if (stinkerOwners().length) new Image().src = STINK_GIF;
+}
+
 /* ---------------------------------------------------------------- render */
 const PANEL = {stand:standings, owner:ownerPanel, week:weekPanel,
                prize:prizePanel, team:teamPanel};
@@ -820,6 +938,7 @@ function go(tab){
     p.classList.toggle('on', p.id === 'p-'+tab));
   render(tab, true);
   window.scrollTo({top:0});
+  if (tab === 'owner') maybeStink(state.me);
 }
 
 document.addEventListener('click', e=>{
@@ -828,7 +947,7 @@ document.addEventListener('click', e=>{
   const n = t.closest('#nav button[data-tab]');
   if (n){ go(n.dataset.tab); return; }
   const o = t.closest('[data-owner]');
-  if (o){ state.me = o.dataset.owner; render(); return; }
+  if (o){ state.me = o.dataset.owner; render(); maybeStink(state.me); return; }
   const g = t.closest('[data-goowner]');
   if (g){ state.me = g.dataset.goowner; go('owner'); return; }
   const w = t.closest('[data-week]');
@@ -890,6 +1009,7 @@ function adopt(board, first){
 
   drawHeader();
   renderAll();
+  primeStinker();
 }
 
 let lastLoad = 0;
