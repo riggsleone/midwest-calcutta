@@ -24,6 +24,19 @@ def money(c):
 
 MANUAL_TYPES = {"The Pink Slip", "QB Down"}
 
+def load_void():
+    """Game ids the commissioner has struck out, because the game was cancelled
+    and will never have a result. Without this a single abandoned game leaves
+    its week forever incomplete and freezes every prize after it."""
+    path = os.path.join(DATA, "manual.json")
+    if not os.path.exists(path): return []
+    try:
+        with open(path) as f: v = json.load(f).get("void_games", [])
+    except Exception:
+        return []
+    return [x for x in v if isinstance(x, str) and x.strip()]
+
+
 def load_manual(owners):
     """Read data/manual.json, the one file entered by hand.
 
@@ -64,11 +77,20 @@ def load_manual(owners):
         w = m.get("week")
         if not isinstance(w, int) or not 1 <= w <= WEEKS:
             errs.append(f"{where}: week is {w!r}, must be a whole number from 1 to {WEEKS}")
+        d = m.get("date")
+        # The rules turn on a date, not a week: the FIRST firing wins and only
+        # same-day firings split. Without a date neither can be decided.
+        try:
+            datetime.date.fromisoformat(str(d))
+        except (TypeError, ValueError):
+            errs.append(f"{where}: date is {d!r}, must be YYYY-MM-DD, "
+                        f"for example \"2026-10-13\". The rules pay the first "
+                        f"trigger and split only same-day ones, so the day matters.")
         m.setdefault("detail", "Entered by hand")
         if m["status"] == "confirmed":
-            if t in seen:
-                errs.append(f"{where}: {t} is confirmed twice. It pays once.")
-            seen.add(t)
+            if (t, tm) in seen:
+                errs.append(f"{where}: {t} is confirmed twice for {tm}.")
+            seen.add((t, tm))
 
     if errs:
         print("\nmanual.json has problems. Nothing was written.")
@@ -76,7 +98,8 @@ def load_manual(owners):
         sys.exit(1)
 
     for m in entries:
-        print(f"manual   {m['type']}, {m['team']}, week {m['week']} ({m['status']})")
+        print(f"manual   {m['type']}, {m['team']}, {m['date']} "
+              f"(week {m['week']}, {m['status']})")
     return entries
 
 
@@ -125,9 +148,16 @@ def mini_season(games, owners, lo, hi):
     return pct, table, rec, rank
 
 
-def split_owner(amount, who):
-    """Owner-level split, to the cent, alphabetical for the odd pennies."""
-    who = sorted(who)
+def split_owner(amount, who, spent=None):
+    """Owner-level split, to the cent.
+
+    The rules give odd pennies on a team prize to the lower-priced team. There
+    is no team here, so the same principle applies one level up: the odd
+    pennies go to whoever spent least at auction. Alphabetical order, which
+    this used to use, quietly favours whoever is early in the alphabet every
+    single time."""
+    spent = spent or {}
+    who = sorted(who, key=lambda o: (spent.get(o, 0), o))
     base, rem = amount//len(who), amount % len(who)
     return [(o, base + (1 if i < rem else 0)) for i, o in enumerate(who)]
 
@@ -202,39 +232,74 @@ def build_board(games, auction, prices, owners, manual, season, sched=None):
             "winners":[{"team":None,"abbr":None,"owner":o,"amount":a,
                         "detail":f"{rc(o)} across their teams, "
                                  f"{p3(pct[o])} win percentage"}
-                       for o, a in split_owner(amt, win)]})
+                       for o, a in split_owner(amt, win, auction["spent_cents"])]})
 
     # ---- novelty settled at the end of the regular season
     if last >= WEEKS:
-        hi_g = max(settled, key=lambda g: max(g["home_score"], g["away_score"]))
-        ht = hi_g["home"] if hi_g["home_score"] >= hi_g["away_score"] else hi_g["away"]
-        pts = max(hi_g["home_score"], hi_g["away_score"])
+        # "Most points scored by one team in one game across the full regular
+        # season. If two teams reach the same high, they split the prize."
+        # Two teams can hit the same number in different games, so this is a
+        # search over every team-game, not over games.
+        best, when = {}, {}
+        for g in settled:
+            for t, sc in ((g["home"], g["home_score"]), (g["away"], g["away_score"])):
+                if sc > best.get(t, -1): best[t], when[t] = sc, g["week"]
+        hi = max(best.values())
+        hot = sorted([t for t, sc in best.items() if sc == hi])
+        amt = NOVELTY["Highest single-game score"]
         ledger.append({"week":WEEKS, "prize":"Highest single-game score",
-            "amount":NOVELTY["Highest single-game score"], "split":False,
-            "detail":f"{pts} points, Week {hi_g['week']}",
-            "winners":[{"team":teams.name(ht),"abbr":ht,"owner":owners.get(ht),
-                        "amount":NOVELTY["Highest single-game score"],
-                        "detail":f"{pts} points in Week {hi_g['week']}"}]})
-        bot = min(teams.TEAMS, key=lambda a:(rec[a]["w"], rec[a]["pf"]-rec[a]["pa"]))
+            "amount":amt, "split":len(hot) > 1,
+            "detail":f"{hi} points" + (f", Week {when[hot[0]]}" if len(hot)==1 else ""),
+            "winners":[{"team":teams.name(t),"abbr":t,"owner":owners.get(t),"amount":a,
+                        "detail":f"{hi} points in Week {when[t]}"}
+                       for t, a in prizes.split(amt, hot, prices)]})
+
+        # "Owner of the team with the worst regular season record. Ties are
+        # broken by worst point differential across the full season. If still
+        # tied, the prize splits evenly." Record is win percentage, so a tie
+        # counts as half a win. Doubled to keep it in whole numbers.
+        # Record means win percentage. Teams can finish on different numbers of
+        # games if one is cancelled, and a 2-15 team is worse than a 2-14 one.
+        key = lambda a: (round((rec[a]["w"] + .5*rec[a]["t"])
+                               / max(1, rec[a]["w"]+rec[a]["l"]+rec[a]["t"]), 9),
+                         rec[a]["pf"] - rec[a]["pa"])
+        worst = min(key(a) for a in teams.TEAMS)
+        bots = sorted([a for a in teams.TEAMS if key(a) == worst])
+        amt = NOVELTY["Bottom of the Barrel"]
+        wl = lambda a: (f"{rec[a]['w']}-{rec[a]['l']}"
+                        + (f"-{rec[a]['t']}" if rec[a]["t"] else ""))
         ledger.append({"week":WEEKS, "prize":"Bottom of the Barrel",
-            "amount":NOVELTY["Bottom of the Barrel"], "split":False,
-            "detail":f"{rec[bot]['w']}-{rec[bot]['l']}, worst record",
-            "winners":[{"team":teams.name(bot),"abbr":bot,"owner":owners.get(bot),
-                        "amount":NOVELTY["Bottom of the Barrel"],
-                        "detail":f"{rec[bot]['w']}-{rec[bot]['l']}, "
-                                 f"{rec[bot]['pf']-rec[bot]['pa']:+d} differential"}]})
+            "amount":amt, "split":len(bots) > 1,
+            "detail":f"{wl(bots[0])}, worst record",
+            "winners":[{"team":teams.name(a),"abbr":a,"owner":owners.get(a),"amount":x,
+                        "detail":f"{wl(a)}, {rec[a]['pf']-rec[a]['pa']:+d} differential"}
+                       for a, x in prizes.split(amt, bots, prices)]})
 
     # ---- manual entries: Pink Slip, QB Down, corrections
+    # "First head coach fired... Same-day firings split the prize." So the
+    # EARLIEST date wins outright, and only entries sharing that exact date
+    # divide it. A firing in Week 15 does not share in a Week 2 firing's money.
+    by_type = {}
     for m in manual:
         if m.get("status") == "proposed": continue      # not confirmed yet
         if m["type"] in ("The Pink Slip", "QB Down"):
-            t = m["team"]
-            ledger.append({"week":m.get("week", last), "prize":m["type"],
-                "amount":NOVELTY[m["type"]], "split":False,
-                "detail":m.get("detail",""), "manual":True,
-                "winners":[{"team":teams.name(t),"abbr":t,"owner":owners.get(t),
-                            "amount":NOVELTY[m["type"]],
-                            "detail":m.get("detail","")}]})
+            by_type.setdefault(m["type"], []).append(m)
+    for ptype, ms in by_type.items():
+        first = min(m["date"] for m in ms)
+        won   = [m for m in ms if m["date"] == first]
+        later = [m for m in ms if m["date"] != first]
+        if later:
+            print(f"note     {ptype}: {len(later)} later entr"
+                  f"{'y' if len(later)==1 else 'ies'} recorded but not paid. "
+                  f"{first} was first.")
+        amt = NOVELTY[ptype]
+        why = {m["team"]: m.get("detail", "") for m in won}
+        ledger.append({"week":min(m["week"] for m in won), "prize":ptype,
+            "amount":amt, "split":len(won) > 1, "manual":True,
+            "detail":won[0].get("detail",""),
+            "winners":[{"team":teams.name(t),"abbr":t,"owner":owners.get(t),
+                        "amount":a, "detail":why[t]}
+                       for t, a in prizes.split(amt, [m["team"] for m in won], prices)]})
 
     # ---- novelty windows close at the end of Week 18. Rules, Section 5:
     # "If a prize has not been triggered by then, its money moves to the
@@ -245,10 +310,21 @@ def build_board(games, auction, prices, owners, manual, season, sched=None):
     # be paid twice.
     TRIGGERED = {"The Pink Slip", "QB Down"}
     have_prizes = {l["prize"] for l in ledger}
-    rolled = 0
+    rolled = weekly_stranded = 0
     if last >= WEEKS:
         rolled = sum(NOVELTY[p] for p in sorted(TRIGGERED) if p not in have_prizes)
-    post_pool = prizes.POST_POOL + rolled
+        # The seven weekly prizes are worth exactly $38 a week, $684 over the
+        # season. Price Check and Upset carry into the next week's own prize,
+        # but Week 18 has no next week, and a prize that simply cannot be
+        # awarded is not carried at all. Either way the rules require that
+        # "every pool ties exactly to the pot", so whatever the weekly
+        # scoreboard did not pay follows the novelty money onto the ladder.
+        weekly_paid = sum(l["amount"] for l in ledger if l["prize"] in prizes.WEEKLY)
+        weekly_stranded = max(0, WEEKS * 3800 - weekly_paid)
+        # The bounty is $1 a win over 272 games. A cancelled game is never
+        # played and never pays, so that dollar follows the same route.
+        weekly_stranded += max(0, 27200 - sum(bounty.values()))
+    post_pool = prizes.POST_POOL + rolled + weekly_stranded
     tier = prizes.ladder(post_pool)
 
     # ---- the postseason ladder, settled a round at a time
@@ -334,15 +410,34 @@ def build_board(games, auction, prices, owners, manual, season, sched=None):
         dead_amt = sum(p["amount"] for p in plist if p["carry"])
 
     # weeks not yet started, plus any carry that is not already in play
+    # Once Week 18 is done, anything the scoreboard did not pay has already
+    # been swept onto the ladder above. Claiming it here as well would count
+    # the same dollars twice and the pot would stop tying.
     from_wk = min(WEEKS, live_w if live_w else last)
-    weekly_left = (max(0, WEEKS - from_wk) * 3800
-                   + (dead_amt if live_w else sum(carries.values())))
-    bounty_left = max(0, 27200 - sum(bounty.values()) - (live["bounty"] if live else 0))
+    if last >= WEEKS:
+        weekly_left = bounty_left = 0
+    else:
+        weekly_left = (max(0, WEEKS - from_wk) * 3800
+                       + (dead_amt if live_w else sum(carries.values())))
+        bounty_left = max(0, 27200 - sum(bounty.values()) - (live["bounty"] if live else 0))
 
     # ---- what is still to come, with live leaders where they exist
-    hi_g = max(settled, key=lambda g: max(g["home_score"], g["away_score"])) if settled else None
-    bot = min(teams.TEAMS, key=lambda a:(rec[a]["w"], rec[a]["pf"]-rec[a]["pa"])) if settled else None
-    ht2 = None
+    lead_hi = lead_bot = "Not started"
+    if settled:
+        _b = {}
+        for g in settled:
+            for t, sc in ((g["home"], g["home_score"]), (g["away"], g["away_score"])):
+                _b[t] = max(_b.get(t, -1), sc)
+        _h = max(_b.values())
+        _t = sorted([t for t, sc in _b.items() if sc == _h])
+        lead_hi = (", ".join(f"{t} ({owners.get(t)})" for t in _t) + f", {_h} points")
+        _k = lambda a: (round((rec[a]["w"] + .5*rec[a]["t"])
+                              / max(1, rec[a]["w"]+rec[a]["l"]+rec[a]["t"]), 9),
+                        rec[a]["pf"] - rec[a]["pa"])
+        _w = min(_k(a) for a in teams.TEAMS)
+        _bt = sorted([a for a in teams.TEAMS if _k(a) == _w])
+        lead_bot = (", ".join(f"{a} ({owners.get(a)})" for a in _bt)
+                    + f", {rec[_bt[0]]['w']}-{rec[_bt[0]]['l']}")
     done_prizes = {l["prize"] for l in ledger}
     pending = []
     def pend(p, amt, when, lead, note):
@@ -352,9 +447,13 @@ def build_board(games, auction, prices, owners, manual, season, sched=None):
     # once. Pend whatever is left of the pool rather than the whole thing.
     post_paid = sum(a["amount"] for a in ledger if a["prize"] == prizes.POST_PRIZE)
     post_left = post_pool - post_paid - (in_play if (live_w and live_w > WEEKS) else 0)
-    rolled_note = ("" if not rolled else
-        f" Includes ${rolled/100:,.0f} rolled in from novelty prizes that were "
-        f"never triggered, paid out on the same ladder percentages.")
+    extra = rolled + weekly_stranded
+    bits = []
+    if rolled: bits.append(f"${rolled/100:,.0f} from novelty prizes that were never triggered")
+    if weekly_stranded: bits.append(f"${weekly_stranded/100:,.2f} of weekly prize money "
+                                    f"that could not be awarded")
+    rolled_note = ("" if not extra else
+        " Includes " + " and ".join(bits) + ", paid out on the same ladder percentages.")
     if post_left > 0:
         nextr = next((r for r in post_rounds if not r["settled"]), None)
         if post_paid or (live_w and live_w > WEEKS):
@@ -382,17 +481,14 @@ def build_board(games, auction, prices, owners, manual, season, sched=None):
             lead = "Not started"
         pend(f"Mini-Season {n}", amt, f"After Week {hi}", lead,
              f"Weeks {lo} to {hi}, best combined win percentage")
-    pend("Highest single-game score",10100,"End of Week 18",
-         (f"{ht2} {max(hi_g['home_score'],hi_g['away_score'])}, Week {hi_g['week']} "
-          f"({owners.get(ht2)})" if settled and (ht2:=(hi_g['home'] if hi_g['home_score']>=hi_g['away_score'] else hi_g['away'])) else "Not started"),
-         "Most points by one team in one game, full regular season")
+    pend("Highest single-game score",10100,"End of Week 18", lead_hi,
+         "Most points by one team in one game, full regular season. A tie splits it.")
     if last < WEEKS:            # after Week 18 the window is shut and the
         pend("QB Down",10100,"When triggered","Not triggered",   # money has moved
              "Season-ending IR or ruled out for the year. Entered by hand.")
         pend("The Pink Slip",10100,"When triggered","Not triggered",
              "First head coach fired or mutually parted with. Entered by hand.")
-    pend("Bottom of the Barrel",7200,"End of Week 18",
-         (f"{bot} {rec[bot]['w']}-{rec[bot]['l']} ({owners.get(bot)})" if settled else "Not started"),
+    pend("Bottom of the Barrel",7200,"End of Week 18", lead_bot,
          "Worst regular season record, ties broken on point differential")
 
     board = {
@@ -421,7 +517,8 @@ def build_board(games, auction, prices, owners, manual, season, sched=None):
       "pending":pending,
       "msTables":ms_tables,
       "post":post_rounds,
-      "postPool":post_pool, "postRolled":rolled, "postTiers":
+      "postPool":post_pool, "postRolled":rolled + weekly_stranded,
+      "postFromNovelty":rolled, "postFromWeekly":weekly_stranded, "postTiers":
         {str(k): v for k, v in tier.items()},
     }
     return board
@@ -480,15 +577,22 @@ def main():
                    tzinfo=datetime.timezone.utc) if fake else None)
         raw = schedule.fetch(season)
         if now: raw = schedule.rewind(raw, now)
-        sched = schedule.read(raw, now)
+        void = load_void()
+        if void: print(f"void     {len(void)} game(s) struck out: {', '.join(void)}")
+        sched = schedule.read(raw, now, void)
         print(f"schedule {len(sched['finalIds'])} of "
               f"{sum(s['total'] for s in sched['weeks'].values())} games final")
         if sched["nextKick"]:
             print(f"next kick {sched['nextKick'].astimezone(schedule.ET):%a %b %-d, %-I:%M%p ET}")
     except Exception as e:
-        sched = None
-        print(f"WARNING  schedule unavailable ({type(e).__name__}: {e}).")
-        print("WARNING  falling back to play-by-play only. No live week this run.")
+        # Without the schedule we cannot tell a finished week from a half
+        # played one. Play-by-play alone would let the board settle Week 7 off
+        # the one o'clock games and pay Team of the Week to a side that is
+        # about to be beaten by a four twenty-five blowout. Stop instead.
+        print(f"\nschedule unavailable ({type(e).__name__}: {e}).")
+        print("Without it a half-played week cannot be told from a finished one,")
+        print("so nothing was written. The board stands as it was. Try again shortly.")
+        sys.exit(1)
 
     # Nothing is live and nothing new has finished since the board was last
     # written, so there is no reason to pull a hundred megabytes of play-by-play.

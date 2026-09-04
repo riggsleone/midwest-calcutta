@@ -95,13 +95,20 @@ def rewind(sched, now):
             for g in sched]
 
 
-def read(sched, now=None):
+def read(sched, now=None, void=()):
     """Boil the schedule down to the three things the board needs.
 
     through   the last week where every game is final, so it can be paid
     live      the earliest week that has kicked off and is not finished, or None
     next_kick the next kickoff still ahead of us, or None
+
+    void      game ids the commissioner has struck out. A game that is
+              cancelled and never played (Bills at Bengals, 2022) otherwise
+              leaves its week permanently unfinished, which would freeze every
+              prize after it for the rest of the season.
     """
+    if void:
+        sched = [g for g in sched if g["game_id"] not in set(void)]
     weeks = week_state(sched, now)
     now = now or datetime.datetime.now(datetime.timezone.utc)
     done = [w for w, s in weeks.items() if s["complete"]]

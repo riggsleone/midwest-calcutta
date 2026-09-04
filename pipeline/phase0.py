@@ -9,6 +9,7 @@ from fetch import fetch_pbp
 SEASON = int(sys.argv[1]) if len(sys.argv) > 1 else 2025
 WEEK   = int(sys.argv[2]) if len(sys.argv) > 2 else 5
 
+import league
 _auction, PRICES, OWNERS = league.load()
 
 print(f"PHASE 0  |  {SEASON} Week {WEEK}\n" + "="*64)
@@ -34,10 +35,11 @@ for g in games:
     if g["week"] >= WEEK: continue
     for t, s, o in ((g["home"],g["home_score"],g["away_score"]),
                     (g["away"],g["away_score"],g["home_score"])):
-        r = rec.setdefault(t, [0,0])
+        r = rec.setdefault(t, [0,0,0])
         if s > o: r[0]+=1
         elif s < o: r[1]+=1
-for t,(w,l) in rec.items(): pre[t] = w/max(1,w+l)
+        else: r[2]+=1
+for t,(w,l,d) in rec.items(): pre[t] = (w + .5*d)/max(1, w+l+d)   # a tie is half a win
 
 # Any abbreviation in the data that the auction does not know about would
 # quietly pay nobody. Catch it here and name it.
