@@ -1,0 +1,15 @@
+{
+  "_how_to_use_this_file": [
+    "Two prizes cannot be read off a scoreboard, so they are typed in here.",
+    "Add one object to 'entries' when a prize is triggered, then commit.",
+    "type    must be exactly 'The Pink Slip' or 'QB Down'.",
+    "team    the three-letter abbreviation, for example NYJ, KC, GB, LV.",
+    "week    the week it happened, a whole number from 1 to 18.",
+    "status  'confirmed' pays it. 'proposed' records it without paying.",
+    "detail  one short sentence. It shows on the page under the prize.",
+    "The build refuses to run if anything here is wrong, and says what.",
+    "Example of a finished entry, to copy into the empty list below:",
+    "{ \"type\": \"The Pink Slip\", \"team\": \"NYJ\", \"week\": 6, \"status\": \"confirmed\", \"detail\": \"Head coach dismissed on the Monday after Week 6\" }"
+  ],
+  "entries": []
+}
