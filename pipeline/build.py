@@ -1,7 +1,7 @@
 """Turn a season of play-by-play into board.json, the one file the page reads.
 
-    python build.py 2026     # the live season
-    python build.py 2025     # a completed season, to prove the whole run
+    python build.py 2026          # the live season
+    python build.py 2025 --test   # a completed season, to prove the whole run
 
 Inputs are stored, outputs are recomputed. Every prize is derived from the
 games every time, so fixing a rule fixes the whole season at once.
@@ -40,22 +40,34 @@ def records(games, upto):
 
 
 def mini_season(games, owners, lo, hi):
-    """Combined win percentage across every team an owner holds."""
+    """Combined win percentage across every team an owner holds.
+
+    Rule book, 4.3: a tie counts as half a win. Level owners go first to
+    total wins in the segment, then to the better average point differential
+    per game across their teams. Only after all three does it split.
+    """
     who = sorted(set(owners.values()))
-    rec = {o: {"w":0,"l":0} for o in who}
+    rec = {o: {"w":0,"l":0,"t":0,"pf":0,"pa":0,"g":0} for o in who}
     for g in games:
         if not (lo <= g["week"] <= hi): continue
-        if g["home_score"] == g["away_score"]: continue
-        w = g["home"] if g["home_score"] > g["away_score"] else g["away"]
-        l = g["away"] if g["home_score"] > g["away_score"] else g["home"]
-        if owners.get(w): rec[owners[w]]["w"] += 1
-        if owners.get(l): rec[owners[l]]["l"] += 1
-    pct = {o: rec[o]["w"]/max(1, rec[o]["w"]+rec[o]["l"]) for o in who}
-    table = [{"owner":o, "w":rec[o]["w"], "l":rec[o]["l"],
-              "g":rec[o]["w"]+rec[o]["l"], "pct":round(pct[o],4),
+        for t, s, opp in ((g["home"], g["home_score"], g["away_score"]),
+                          (g["away"], g["away_score"], g["home_score"])):
+            o = owners.get(t)
+            if not o: continue
+            r = rec[o]
+            r["g"] += 1; r["pf"] += s; r["pa"] += opp
+            if   s > opp: r["w"] += 1
+            elif s < opp: r["l"] += 1
+            else:         r["t"] += 1
+    pct  = {o: (rec[o]["w"] + .5*rec[o]["t"]) / max(1, rec[o]["g"]) for o in who}
+    diff = {o: (rec[o]["pf"] - rec[o]["pa"]) / max(1, rec[o]["g"]) for o in who}
+    # the full ordering key, best first. Rounded so float noise never decides money.
+    rank = lambda o: (round(pct[o], 9), rec[o]["w"], round(diff[o], 6))
+    table = [{"owner":o, "w":rec[o]["w"], "l":rec[o]["l"], "t":rec[o]["t"],
+              "g":rec[o]["g"], "pct":round(pct[o],4), "diff":round(diff[o],2),
               "teams":sum(1 for t,x in owners.items() if x==o)}
-             for o in sorted(who, key=lambda x:-pct[x])]
-    return pct, table, rec
+             for o in sorted(who, key=rank, reverse=True)]
+    return pct, table, rec, rank
 
 
 def split_owner(amount, who):
@@ -87,18 +99,21 @@ def build_board(games, auction, prices, owners, manual, season):
     bounty = {a: rec[a]["w"]*100 + int(rec[a]["t"]*50) for a in teams.TEAMS}
 
     # ---- mini-seasons, settled only once their window has completed
-    ms_table = None
+    ms_tables = {}
     for n, (lo, hi, amt) in MINI.items():
         if last < hi: continue
-        pct, table, mrec = mini_season(games, owners, lo, hi)
-        if n == 1: ms_table = table
-        best = max(pct.values())
-        win = [o for o in pct if pct[o] == best]
+        pct, table, mrec, rank = mini_season(games, owners, lo, hi)
+        ms_tables[f"Mini-Season {n}"] = {"n":n,"lo":lo,"hi":hi,"final":True,"rows":table}
+        best = max(rank(o) for o in pct)
+        win = [o for o in pct if rank(o) == best]
+        def rc(o):
+            r = mrec[o]
+            return f"{r['w']}-{r['l']}" + (f"-{r['t']}" if r["t"] else "")
         ledger.append({"week":hi, "prize":f"Mini-Season {n}", "amount":amt,
             "split":len(win)>1,
-            "detail":f"Weeks {lo} to {hi}, best combined win percentage, {p3(best)}",
+            "detail":f"Weeks {lo} to {hi}, best combined win percentage, {p3(pct[win[0]])}",
             "winners":[{"team":None,"abbr":None,"owner":o,"amount":a,
-                        "detail":f"{mrec[o]['w']}-{mrec[o]['l']} across their teams, "
+                        "detail":f"{rc(o)} across their teams, "
                                  f"{p3(pct[o])} win percentage"}
                        for o, a in split_owner(amt, win)]})
 
@@ -164,8 +179,6 @@ def build_board(games, auction, prices, owners, manual, season):
     hi_g = max(games, key=lambda g: max(g["home_score"], g["away_score"])) if games else None
     bot = min(teams.TEAMS, key=lambda a:(rec[a]["w"], rec[a]["pf"]-rec[a]["pa"])) if games else None
     ht2 = None
-    if hi_g:
-        ht2 = hi_g["home"] if hi_g["home_score"] >= hi_g["away_score"] else hi_g["away"]
     done_prizes = {l["prize"] for l in ledger}
     pending = []
     def pend(p, amt, when, lead, note):
@@ -176,17 +189,20 @@ def build_board(games, auction, prices, owners, manual, season):
     for n,(lo,hi,amt) in MINI.items():
         if f"Mini-Season {n}" in done_prizes: continue
         if last >= lo:
-            pct,_,mr = mini_season(games, owners, lo, min(last,hi))
-            b = max(pct.values()); ldr=[o for o in pct if pct[o]==b]
-            lead = (" and ".join(ldr) + f" {p3(b)}, {mr[ldr[0]]['w']}-{mr[ldr[0]]['l']}"
-                    f" over Weeks {lo} to {min(last,hi)}")
+            thru = min(last, hi)
+            pct, table, mr, rank = mini_season(games, owners, lo, thru)
+            ms_tables[f"Mini-Season {n}"] = {"n":n,"lo":lo,"hi":hi,"thru":thru,
+                                             "final":False,"rows":table}
+            b = max(rank(o) for o in pct); ldr = [o for o in pct if rank(o) == b]
+            lead = (" and ".join(ldr) + f" {p3(pct[ldr[0]])}, {mr[ldr[0]]['w']}-{mr[ldr[0]]['l']}"
+                    f" over Weeks {lo} to {thru}")
         else:
             lead = "Not started"
         pend(f"Mini-Season {n}", amt, f"After Week {hi}", lead,
              f"Weeks {lo} to {hi}, best combined win percentage")
     pend("Highest single-game score",10100,"End of Week 18",
          (f"{ht2} {max(hi_g['home_score'],hi_g['away_score'])}, Week {hi_g['week']} "
-          f"({owners.get(ht2)})" if ht2 else "Not started"),
+          f"({owners.get(ht2)})" if games and (ht2:=(hi_g['home'] if hi_g['home_score']>=hi_g['away_score'] else hi_g['away'])) else "Not started"),
          "Most points by one team in one game, full regular season")
     pend("QB Down",10100,"When triggered","Not triggered",
          "Season-ending IR or ruled out for the year. Entered by hand.")
@@ -218,7 +234,7 @@ def build_board(games, auction, prices, owners, manual, season):
                for a in teams.TEAMS],
       "ledger":sorted(ledger, key=lambda l:(l["week"], l["prize"])),
       "pending":pending,
-      "msTable":ms_table,
+      "msTables":ms_tables,
     }
     return board
 
