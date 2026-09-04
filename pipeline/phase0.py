@@ -39,6 +39,17 @@ for g in games:
         elif s < o: r[1]+=1
 for t,(w,l) in rec.items(): pre[t] = w/max(1,w+l)
 
+# Any abbreviation in the data that the auction does not know about would
+# quietly pay nobody. Catch it here and name it.
+seen = {t for g in games for t in (g["home"], g["away"])}
+unknown = sorted(seen - set(OWNERS))
+if unknown:
+    print(f"!! {len(unknown)} team abbreviation(s) in the data are not in the auction:")
+    print(f"!! {unknown}")
+    print(f"!! auction knows: {sorted(OWNERS)}\n")
+else:
+    print(f"teams    all {len(seen)} abbreviations matched to the auction\n")
+
 ctx = prizes.Ctx(games, OWNERS, PRICES)
 awards, carries = prizes.run_week(ctx, WEEK, {}, pre)
 got = {a["prize"] for a in awards}
@@ -54,7 +65,8 @@ for name in prizes.WEEKLY:
     head = f"${a['amount']/100:.2f}" + (f"  shared {n} ways" if n > 1 else "")
     print(f"{name:<22}{'OK':<10}{head}")
     for x in a["winners"]:                       # every winner, and why
-        print(f"{'':32}{x['team']:<4} {x['owner']:<7} ${x['amount']/100:>6.2f}  {x['detail']}")
+        owner = x['owner'] or "NO OWNER"
+        print(f"{'':32}{x['team']:<4} {owner:<9} ${x['amount']/100:>6.2f}  {x['detail']}")
 
 errs = validate.check_awards(awards) + validate.check_league(
     sorted(PRICES), OWNERS, PRICES)
