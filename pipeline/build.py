@@ -22,10 +22,62 @@ def money(c):
     return "$" + (f"{c//100:,}" if c % 100 == 0 else f"{c/100:,.2f}")
 
 
-def load_manual():
+MANUAL_TYPES = {"The Pink Slip", "QB Down"}
+
+def load_manual(owners):
+    """Read data/manual.json, the one file entered by hand.
+
+    Two prizes cannot be read off a scoreboard: the first head coach fired and
+    the first quarterback ruled out for the season. They are typed in here.
+    Every entry is checked before a dollar moves, because a typo in a team
+    abbreviation would quietly pay the wrong owner $101.
+    """
     path = os.path.join(DATA, "manual.json")
     if not os.path.exists(path): return []
-    with open(path) as f: return json.load(f).get("entries", [])
+    try:
+        with open(path) as f: raw = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"\nmanual.json is not valid JSON: line {e.lineno}, column {e.colno}, {e.msg}")
+        print("A missing comma or quote is the usual cause. Nothing was written.")
+        sys.exit(1)
+
+    entries, errs = raw.get("entries", []), []
+    if not isinstance(entries, list):
+        print("\nmanual.json: 'entries' must be a list. Nothing was written."); sys.exit(1)
+
+    seen = set()
+    for i, m in enumerate(entries, 1):
+        where = f"entry {i}"
+        if not isinstance(m, dict):
+            errs.append(f"{where}: should be an object in {{ }}"); continue
+        t = m.get("type")
+        if t not in MANUAL_TYPES:
+            errs.append(f"{where}: type is {t!r}, must be exactly one of "
+                        f"{sorted(MANUAL_TYPES)}"); continue
+        m.setdefault("status", "confirmed")
+        if m["status"] not in ("confirmed", "proposed"):
+            errs.append(f"{where}: status is {m['status']!r}, must be 'confirmed' or 'proposed'")
+        tm = m.get("team")
+        if tm not in owners:
+            errs.append(f"{where}: team is {tm!r}, must be one of the 32 abbreviations, "
+                        f"for example {', '.join(sorted(owners)[:6])} ...")
+        w = m.get("week")
+        if not isinstance(w, int) or not 1 <= w <= WEEKS:
+            errs.append(f"{where}: week is {w!r}, must be a whole number from 1 to {WEEKS}")
+        m.setdefault("detail", "Entered by hand")
+        if m["status"] == "confirmed":
+            if t in seen:
+                errs.append(f"{where}: {t} is confirmed twice. It pays once.")
+            seen.add(t)
+
+    if errs:
+        print("\nmanual.json has problems. Nothing was written.")
+        for e in errs: print("  !", e)
+        sys.exit(1)
+
+    for m in entries:
+        print(f"manual   {m['type']}, {m['team']}, week {m['week']} ({m['status']})")
+    return entries
 
 
 def records(games, upto):
@@ -460,7 +512,7 @@ def main():
     for g in games:
         g["final"] = (g["game_id"] in sched["finalIds"]) if sched else True
 
-    board = build_board(games, auction, prices, owners, load_manual(), season, sched)
+    board = build_board(games, auction, prices, owners, load_manual(owners), season, sched)
 
     # A week that has been settled must never quietly change. If an upstream
     # correction moves one, stop and say so rather than restating the board
