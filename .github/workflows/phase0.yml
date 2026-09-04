@@ -13,9 +13,11 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - name: Run Phase 0
+        shell: bash
         run: |
+          set -o pipefail
           cd pipeline
-          python phase0.py "${{ inputs.season }}" "${{ inputs.week }}" | tee report.txt
+          python phase0.py "${{ inputs.season }}" "${{ inputs.week }}" 2>&1 | tee report.txt
       - name: Put the report in the run summary
         if: always()
         run: |
