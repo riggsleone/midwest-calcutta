@@ -13,10 +13,13 @@ from fetch import fetch_pbp
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "..", "data")
 POT, BUYIN, WEEKS = 250000, 25000, 18
+LAST_WEEK = 22          # Week 18, then the four postseason rounds
 NOVELTY = {"Highest single-game score":10100, "The Pink Slip":10100,
            "QB Down":10100, "Bottom of the Barrel":7200}
 MINI = {1:(1,6,4900), 2:(7,12,5400), 3:(13,18,6600)}
 p3 = lambda v: f"{v:.3f}".lstrip("0")
+def money(c):
+    return "$" + (f"{c//100:,}" if c % 100 == 0 else f"{c/100:,.2f}")
 
 
 def load_manual():
@@ -92,12 +95,14 @@ def settle_point(games, sched):
         played = sorted({g["week"] for g in games})
         return (max(played) if played else 0), None
     through = 0
-    for w in range(1, WEEKS+1):
+    for w in range(1, LAST_WEEK+1):
         st = sched["weeks"].get(w)
-        if st and st["complete"] and have.get(w, 0) >= st["total"]:
-            through = w
-        else:
-            break
+        if not st or not st["complete"]: break
+        # A regular week also needs play-by-play, because its seven prizes are
+        # scored from plays. A postseason round only needs who won, which the
+        # schedule already carries, so it settles without waiting for anything.
+        if w <= WEEKS and have.get(w, 0) < st["total"]: break
+        through = w
     # the live week is always the one after the last settled week, and only
     # once it has actually kicked off. Between the final whistle and the next
     # kickoff there is no live week at all.
@@ -179,6 +184,27 @@ def build_board(games, auction, prices, owners, manual, season, sched=None):
                             "amount":NOVELTY[m["type"]],
                             "detail":m.get("detail","")}]})
 
+    # ---- novelty windows close at the end of Week 18. Rules, Section 5:
+    # "If a prize has not been triggered by then, its money moves to the
+    # postseason pool and is paid out on the ladder percentages." Only the two
+    # trigger-based prizes can go unclaimed; the other two always resolve.
+    # This must run AFTER the manual entries above, or a Pink Slip that was
+    # entered by hand would still be treated as untriggered and its $101 would
+    # be paid twice.
+    TRIGGERED = {"The Pink Slip", "QB Down"}
+    have_prizes = {l["prize"] for l in ledger}
+    rolled = 0
+    if last >= WEEKS:
+        rolled = sum(NOVELTY[p] for p in sorted(TRIGGERED) if p not in have_prizes)
+    post_pool = prizes.POST_POOL + rolled
+    tier = prizes.ladder(post_pool)
+
+    # ---- the postseason ladder, settled a round at a time
+    post_rounds, post_awards = ([], [])
+    if sched:
+        post_rounds, post_awards = prizes.postseason(sched["games"], owners, post_pool)
+        ledger += [a for a in post_awards if a["week"] <= through]
+
     # ---- fill in full names on weekly awards, which carry abbreviations
     for l in ledger:
         for x in l["winners"]:
@@ -194,6 +220,7 @@ def build_board(games, auction, prices, owners, manual, season, sched=None):
         for x in l["winners"]:
             if not x["owner"]: continue
             k = ("weekly" if l["prize"] in WEEKLY else
+                 "post" if l["prize"] == prizes.POST_PRIZE else
                  "mini" if l["prize"].startswith("Mini-Season") else "novelty")
             cat[x["owner"]][k] += x["amount"]
             if x["abbr"]: earned[x["abbr"]] += x["amount"]
@@ -207,7 +234,18 @@ def build_board(games, auction, prices, owners, manual, season, sched=None):
     # Leaders only, computed from the games already final. Nothing here is paid
     # and nothing here counts in the standings until the last game goes final.
     live, in_play, dead_amt = None, 0, 0
-    if live_w:
+    if live_w and live_w > WEEKS:
+        # A live playoff round. There are no weekly prizes here; the money on
+        # the table is the ladder for this round, and it pays when the round
+        # is over, the same as a regular week.
+        r = next((x for x in post_rounds if x["week"] == live_w), None)
+        if r:
+            live = {"week":live_w, "started":True, "post":True,
+                    "round":r["code"], "label":r["label"],
+                    "gamesTotal":r["gamesTotal"], "gamesFinal":r["gamesFinal"],
+                    "bounty":0, "prizes":[]}
+            in_play = r["amount"]
+    elif live_w:
         pre = {}
         r0 = records(settled, live_w-1)
         for t, x in r0.items():
@@ -244,7 +282,7 @@ def build_board(games, auction, prices, owners, manual, season, sched=None):
         dead_amt = sum(p["amount"] for p in plist if p["carry"])
 
     # weeks not yet started, plus any carry that is not already in play
-    from_wk = live_w if live_w else last
+    from_wk = min(WEEKS, live_w if live_w else last)
     weekly_left = (max(0, WEEKS - from_wk) * 3800
                    + (dead_amt if live_w else sum(carries.values())))
     bounty_left = max(0, 27200 - sum(bounty.values()) - (live["bounty"] if live else 0))
@@ -258,8 +296,26 @@ def build_board(games, auction, prices, owners, manual, season, sched=None):
     def pend(p, amt, when, lead, note):
         if p not in done_prizes: pending.append(
             {"prize":p,"amount":amt,"when":when,"lead":lead,"note":note})
-    pend("Postseason ladder",100000,"After the Super Bowl","Not started",
-         "14 teams pay, from $250 for the champion down to $25 for a wild card loss")
+    # The ladder pays a round at a time, so it is both awarded and pending at
+    # once. Pend whatever is left of the pool rather than the whole thing.
+    post_paid = sum(a["amount"] for a in ledger if a["prize"] == prizes.POST_PRIZE)
+    post_left = post_pool - post_paid - (in_play if (live_w and live_w > WEEKS) else 0)
+    rolled_note = ("" if not rolled else
+        f" Includes ${rolled/100:,.0f} rolled in from novelty prizes that were "
+        f"never triggered, paid out on the same ladder percentages.")
+    if post_left > 0:
+        nextr = next((r for r in post_rounds if not r["settled"]), None)
+        if post_paid or (live_w and live_w > WEEKS):
+            lead = (f"{nextr['label']} round next" if nextr
+                    else f"${post_paid/100:,.0f} paid so far")
+        elif post_rounds:
+            lead = "Bracket set, Wild Card round next"
+        else:
+            lead = "Not started"
+        pending.append({"prize":"Postseason ladder", "amount":post_left,
+            "when":"Round by round", "lead":lead,
+            "note":(f"14 teams pay, from {money(tier['champion'])} for the champion "
+                    f"down to {money(tier[19])} for a wild card loss." + rolled_note)})
     for n,(lo,hi,amt) in MINI.items():
         if f"Mini-Season {n}" in done_prizes: continue
         if last >= lo:
@@ -278,10 +334,11 @@ def build_board(games, auction, prices, owners, manual, season, sched=None):
          (f"{ht2} {max(hi_g['home_score'],hi_g['away_score'])}, Week {hi_g['week']} "
           f"({owners.get(ht2)})" if settled and (ht2:=(hi_g['home'] if hi_g['home_score']>=hi_g['away_score'] else hi_g['away'])) else "Not started"),
          "Most points by one team in one game, full regular season")
-    pend("QB Down",10100,"When triggered","Not triggered",
-         "Season-ending IR or ruled out for the year. Entered by hand.")
-    pend("The Pink Slip",10100,"When triggered","Not triggered",
-         "First head coach fired or mutually parted with. Entered by hand.")
+    if last < WEEKS:            # after Week 18 the window is shut and the
+        pend("QB Down",10100,"When triggered","Not triggered",   # money has moved
+             "Season-ending IR or ruled out for the year. Entered by hand.")
+        pend("The Pink Slip",10100,"When triggered","Not triggered",
+             "First head coach fired or mutually parted with. Entered by hand.")
     pend("Bottom of the Barrel",7200,"End of Week 18",
          (f"{bot} {rec[bot]['w']}-{rec[bot]['l']} ({owners.get(bot)})" if settled else "Not started"),
          "Worst regular season record, ties broken on point differential")
@@ -311,6 +368,9 @@ def build_board(games, auction, prices, owners, manual, season, sched=None):
       "ledger":sorted(ledger, key=lambda l:(l["week"], l["prize"])),
       "pending":pending,
       "msTables":ms_tables,
+      "post":post_rounds,
+      "postPool":post_pool, "postRolled":rolled, "postTiers":
+        {str(k): v for k, v in tier.items()},
     }
     return board
 
@@ -448,13 +508,22 @@ def main():
     print(f"  win bounty      ${bounty/100:>9,.2f}   $1 a win")
     print(f"  mini-seasons    ${mini/100:>9,.2f}")
     print(f"  novelty         ${nov/100:>9,.2f}")
+    if tot(lambda l: l["prize"] == prizes.POST_PRIZE):
+        print(f"  postseason      ${tot(lambda l: l['prize'] == prizes.POST_PRIZE)/100:>9,.2f}")
     print(f"  AWARDED         ${m['awarded']/100:>9,.2f}")
     if m["inPlay"]:
         print(f"  in play now     ${m['inPlay']/100:>9,.2f}   week {board['liveWeek']['week']}, not yet paid")
     print(f"  still to come   ${m['stillToCome']/100:>9,.2f}")
     print(f"  POT             ${m['pot']/100:>9,.2f}")
-    assert weekly + bounty + mini + nov == m["awarded"], "categories must tie"
+    post = tot(lambda l: l["prize"] == prizes.POST_PRIZE)
+    assert weekly + bounty + mini + nov + post == m["awarded"], "categories must tie"
     assert m["awarded"] + m["inPlay"] + m["stillToCome"] == POT
+    # stillToCome is a residual, so it goes negative rather than failing when
+    # something is paid twice. Check the pot itself.
+    if m["awarded"] + m["inPlay"] > POT:
+        print(f"\nOVERPAID. ${(m['awarded']+m['inPlay'])/100:,.2f} committed "
+              f"against a ${POT/100:,.2f} pot. Nothing written.")
+        sys.exit(1)
 
     # ---- the prizes people will ask about by name
     named = [l for l in L if l["prize"] not in prizes.WEEKLY]
@@ -481,6 +550,22 @@ def main():
                    or ("carries into next week" if p["carry"] else "nothing qualifies yet"))
             print(f"  {p['prize']:<24}${p['amount']/100:>7,.2f}   {who}")
         print(f"  {'win bounty so far':<24}${lw['bounty']/100:>7,.2f}")
+
+    if board["post"]:
+        print("\nPOSTSEASON LADDER")
+        for r in board["post"]:
+            state = ("settled" if r["settled"] else
+                     f"{r['gamesFinal']} of {r['gamesTotal']} final")
+            print(f"  {r['label']:<14}${r['paid']/100:>8,.2f}   {state}")
+        print(f"  {'ladder paid':<14}${sum(r['paid'] for r in board['post'])/100:>8,.2f}"
+              f"   of ${board['postPool']/100:,.2f}")
+    if board["postRolled"]:
+        print(f"\nNOVELTY ROLLED INTO THE POSTSEASON POOL  ${board['postRolled']/100:,.2f}")
+        print("  never triggered by the end of Week 18, so it pays on the ladder instead")
+        t = board["postTiers"]
+        print(f"  champion ${int(t['champion'])/100:,.2f}   runner-up ${int(t['22'])/100:,.2f}"
+              f"   conference ${int(t['21'])/100:,.2f}   divisional ${int(t['20'])/100:,.2f}"
+              f"   wild card ${int(t['19'])/100:,.2f}")
 
     print("\nSTILL TO COME")
     for p in board["pending"]:

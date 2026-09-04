@@ -148,3 +148,106 @@ def run_week(ctx, w, carries, pre):
             new[name] = 0
             out.append(a)
     return out, new
+
+# ---------------------------------------------------------------- postseason
+# Fourteen teams pay. A team earns for the round it goes out in, and the
+# champion earns for winning the last one.
+#   250 + 140 + 2x100 + 4x65 + 6x25 = 1000, the whole postseason pool.
+#
+# This needs no play-by-play. Who won and lost a playoff game is in the
+# schedule, which we already read to know when a week is live.
+POST_ROUNDS = {19: ("WC",   "Wild Card",   6),
+               20: ("DIV",  "Divisional",  4),
+               21: ("CONF", "Conference",  2),
+               22: ("SB",   "Super Bowl",  1)}
+LOSER_PAYS  = {19: 2500, 20: 6500, 21: 10000, 22: 14000}
+CHAMPION    = 25000
+POST_POOL   = 100000
+POST_PRIZE  = "Postseason ladder"
+
+
+def _outcome(g):
+    """(winner, loser) for a final game, or (None, None). A playoff game
+    cannot end level, so there is no tie case to handle."""
+    if not g["final"] or g["home_score"] is None or g["away_score"] is None:
+        return None, None
+    if g["home_score"] > g["away_score"]: return g["home"], g["away"]
+    if g["away_score"] > g["home_score"]: return g["away"], g["home"]
+    return None, None
+
+
+def ladder(pool=POST_POOL):
+    """Split the postseason pool across the five tiers, to the cent.
+
+    The tiers are fixed percentages of the pool: 25% champion, 14% runner-up,
+    10% each conference loser, 6.5% each divisional loser, 2.5% each wild card
+    loser. The pool is normally $1,000, but any novelty prize left untriggered
+    at the end of Week 18 moves into it (Section 5), so it can be larger.
+
+    Rule book: "in the postseason pool the champion's share absorbs the
+    difference." So every losing tier rounds to the cent and the champion takes
+    whatever is left, which makes the pool tie exactly no matter the size.
+    """
+    out, spent = {}, 0
+    for wk, n in ((19, 6), (20, 4), (21, 2), (22, 1)):
+        a = round(pool * LOSER_PAYS[wk] / POST_POOL)
+        out[wk] = a
+        spent += a * n
+    out["champion"] = pool - spent
+    assert sum(out[w] * n for w, n in ((19,6),(20,4),(21,2),(22,1))) \
+           + out["champion"] == pool, "the ladder must tie to the pool"
+    return out
+
+
+def postseason(sched_games, owners, pool=POST_POOL):
+    """Build the ladder from schedule rows.
+
+    Returns (rounds, awards). A round pays only once every game in it is
+    final, the same rule the regular weeks follow: no money moves while a
+    round is half played.
+    """
+    rounds, awards = [], []
+    tier = ladder(pool)
+    champion = tier["champion"]
+    for wk, (code, label, expect) in POST_ROUNDS.items():
+        gs = sorted([g for g in sched_games if g["week"] == wk and g["post"]],
+                    key=lambda g: (g["kick"] or 0, g["game_id"]))
+        if not gs: continue
+        pay, teams = tier[wk], []
+        detail = []
+        for g in gs:
+            w, l = _outcome(g)
+            row = {"away": g["away"], "home": g["home"],
+                   "aScore": g["away_score"], "hScore": g["home_score"],
+                   "final": bool(w), "winner": w, "loser": l,
+                   "kick": g["kick"].strftime("%Y-%m-%dT%H:%M:%SZ") if g["kick"] else None,
+                   "pays": []}
+            if w:
+                why = "Lost the Super Bowl" if wk == 22 else f"Lost in the {label} round"
+                row["pays"].append({"team": l, "amount": pay, "why": why})
+                teams.append((l, pay, why))
+                if wk == 22:
+                    row["pays"].append({"team": w, "amount": champion, "why": "Won the Super Bowl"})
+                    teams.append((w, champion, "Won the Super Bowl"))
+            detail.append(row)
+
+        settled = len(gs) == expect and all(r["final"] for r in detail)
+        total = sum(a for _, a, _ in teams)
+        rounds.append({"week": wk, "code": code, "label": label,
+                       "games": detail, "settled": settled,
+                       "gamesTotal": len(gs),
+                       "gamesFinal": sum(1 for r in detail if r["final"]),
+                       "amount": total if settled else expect * pay + (champion if wk == 22 else 0),
+                       "perTeam": pay, "champion": champion if wk == 22 else None,
+                       "paid": total})
+        if settled and teams:
+            awards.append({
+                # Not a split. Six teams each earning $25 is six separate
+                # payouts, so the page must not label it "shared six ways".
+                "week": wk, "prize": POST_PRIZE, "amount": total,
+                "split": False, "perTeam": True,
+                "detail": f"{label} round",
+                "round": code,
+                "winners": [{"team": t, "owner": owners.get(t), "amount": a,
+                             "detail": why} for t, a, why in teams]})
+    return rounds, awards

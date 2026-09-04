@@ -13,6 +13,7 @@ Source: nflverse/nfldata games.csv, the same project behind the play-by-play.
 Standard library only, so the scheduled job has nothing to install.
 """
 import csv, io, urllib.request, datetime
+import distill
 
 URL = "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
 
@@ -35,19 +36,34 @@ def _kick(day, time_):
         return None
 
 
+# The postseason rounds, by the week number the schedule gives them.
+ROUNDS = {19: "WC", 20: "DIV", 21: "CONF", 22: "SB"}
+TYPES = {"REG", "WC", "DIV", "CON", "SB"}
+
+
 def fetch(season, timeout=120):
-    """Every regular season game for one season, with kickoff and final flag."""
+    """Every game of one season, regular and postseason, with kickoff, scores
+    and a final flag. Team abbreviations come through the same alias map the
+    play-by-play uses, so "LA" and "LAR" are never two different teams."""
     req = urllib.request.Request(URL, headers={"User-Agent": "calcutta-pipeline"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         raw = r.read()
     rd = csv.DictReader(io.StringIO(raw.decode("utf-8", "replace")))
     out = []
     for row in rd:
-        if row.get("season") != str(season):      continue
-        if (row.get("game_type") or "") != "REG": continue
+        if row.get("season") != str(season): continue
+        kind = (row.get("game_type") or "").strip()
+        if kind not in TYPES: continue
         # a game is over when the schedule carries its result, not before
         done = (row.get("result") or "").strip() != ""
+        def score(k):
+            v = (row.get(k) or "").strip()
+            return int(float(v)) if v not in ("", "NA") else None
         out.append({"game_id": row["game_id"], "week": int(row["week"]),
+                    "type": kind, "post": kind != "REG",
+                    "home": distill.team(row.get("home_team")),
+                    "away": distill.team(row.get("away_team")),
+                    "home_score": score("home_score"), "away_score": score("away_score"),
                     "kick": _kick(row.get("gameday"), row.get("gametime")),
                     "final": done})
     return out
@@ -95,4 +111,5 @@ def read(sched, now=None):
     ahead = [g["kick"] for g in sched if g["kick"] and g["kick"] > now]
     return {"weeks": weeks, "through": through, "live": live,
             "finalIds": {g["game_id"] for g in sched if g["final"]},
+            "games": sched,
             "nextKick": min(ahead) if ahead else None}
