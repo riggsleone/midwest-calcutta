@@ -368,16 +368,11 @@ function stampTime(iso){
 }
 
 function drawHeader(){
-  const n = $('#notice');
-  if (PRE){
-    n.innerHTML = `<b>Before kickoff</b> &nbsp;Prices, owners and rosters are final from the auction. Every figure below is a real zero until Week 1 kicks off.`;
-  } else if (DATA.isLive && LIVE){
-    n.innerHTML = LIVE.post
-      ? `<b>${esc(LIVE.label)} live</b> &nbsp;${LIVE.gamesFinal} of ${LIVE.gamesTotal} games final. The ladder pays once the round is over.`
-      : `<b>Week ${LIVE.week} live</b> &nbsp;Leaders update as games finish. Nothing is paid and nothing counts in the standings until every game in the week is final.`;
-  } else {
-    n.style.display = 'none';
-  }
+  /* No banner, ever. It was there to say "this is a prototype", and it is not
+     one any more. Everything it carried is said where it belongs instead: the
+     header stamp shows live or through-week, and the This Week panel says
+     nothing pays until the last game is final. */
+  $('#notice').style.display = 'none';
 
   $('#stamp').innerHTML = PRE
     ? (DATA.nextKick ? `Week 1 kicks off<br>${kickText(DATA.nextKick)}` : `Season starts<br>Week 1`)
@@ -657,7 +652,7 @@ const RULE = {
  'QB Down': ['$101, once.',
    'The first starting quarterback ruled out for the season, from Week 1 kickoff to the end of Week 18. Entered by hand once the team confirms it.',
    'Same-day rulings split it.'],
- 'Postseason ladder': ['PLACEHOLDER',
+ 'Postseason ladder': ['$1,000, paid round by round.',
    'Every one of the fourteen playoff teams pays its owner for the round it goes out in: $250 to the champion, $140 to the runner-up, $100 to each conference loser, $65 to each divisional loser, $25 to each wild card loser.',
    'A round pays only once every game in it is final. No ties are possible, so nothing splits.']
 };
