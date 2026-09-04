@@ -210,6 +210,8 @@ th.s[data-on="1"]{color:var(--acc);}
 .bootmsg code{font-family:var(--mono);font-size:11.5px;color:var(--tx);}
 /* room for a two-character place like T4 without crowding the name */
 .row .rank{width:21px;}
+/* a playoff round is named, not numbered, so its tag needs a little more room */
+.row .rank.wide{width:30px;font-size:9.5px;letter-spacing:.02em;font-weight:600;}
 .spin{width:22px;height:22px;border-radius:50%;border:2px solid var(--line);
   border-top-color:var(--acc);margin:0 auto 14px;animation:sp .8s linear infinite;}
 @keyframes sp{to{transform:rotate(360deg);}}
@@ -301,6 +303,21 @@ const state = {
 const ORDER7 = ['Team of the Week','Stinker of the Week','Price Check',
                 'Upset of the Week','Shootout','Most Field Goals','Longest TD'];
 
+/* The schedule numbers the playoff rounds 19 to 22, but nobody calls the
+   Super Bowl "Week 22", and the seven weekly prizes stop at Week 18. So the
+   ribbon shows rounds by name from there on. */
+const ROUND = {19:['WC','Wild Card'], 20:['DIV','Divisional'],
+               21:['CONF','Conference'], 22:['SB','Super Bowl']};
+const REG_WEEKS = 18;
+const isPost  = n => n > REG_WEEKS;
+const wkPill  = n => isPost(n) ? ROUND[n][0] : 'W' + n;
+const wkName  = n => isPost(n) ? ROUND[n][1] : 'Week ' + n;
+const wkTag   = n => isPost(n) ? ROUND[n][0] : String(n);
+const rankCell= n => `<span class="rank${isPost(n)?' wide':''}">${wkTag(n)}</span>`;
+const wkThru  = n => n === 0 ? 'Before Week 1'
+                  : isPost(n) ? (n === 22 ? 'Season complete' : 'Through the ' + ROUND[n][1])
+                  : 'Through Week ' + n;
+
 /* ---------------------------------------------------------------- chips */
 /* Chips carry both team colours: primary as the ground, secondary as a hairline
    outline. Lettering stays plain black or white, so all 32 read cleanly. */
@@ -322,7 +339,7 @@ const chipsFor = list => `<div class="chips">${list.map(chipHTML).join('')}</div
 /* one line per winning team, so a shared prize shows who won it and why */
 function winnerLines(l, showAmt){
   return l.winners.map(w=>`<span class="wl">${w.abbr?chipHTML(w.abbr):''}
-    <b>${esc(w.owner || 'no owner')}</b>${showAmt&&l.split?`<span class="amt2">${money(w.amount)}</span>`:''}
+    <b>${esc(w.owner || 'no owner')}</b>${showAmt&&(l.split||l.perTeam)?`<span class="amt2">${money(w.amount)}</span>`:''}
     <span>${esc(w.detail||l.detail)}</span></span>`).join('');
 }
 
@@ -355,7 +372,9 @@ function drawHeader(){
   if (PRE){
     n.innerHTML = `<b>Before kickoff</b> &nbsp;Prices, owners and rosters are final from the auction. Every figure below is a real zero until Week 1 kicks off.`;
   } else if (DATA.isLive && LIVE){
-    n.innerHTML = `<b>Week ${LIVE.week} live</b> &nbsp;Leaders update as games finish. Nothing is paid and nothing counts in the standings until every game in the week is final.`;
+    n.innerHTML = LIVE.post
+      ? `<b>${esc(LIVE.label)} live</b> &nbsp;${LIVE.gamesFinal} of ${LIVE.gamesTotal} games final. The ladder pays once the round is over.`
+      : `<b>Week ${LIVE.week} live</b> &nbsp;Leaders update as games finish. Nothing is paid and nothing counts in the standings until every game in the week is final.`;
   } else {
     n.style.display = 'none';
   }
@@ -363,8 +382,8 @@ function drawHeader(){
   $('#stamp').innerHTML = PRE
     ? (DATA.nextKick ? `Week 1 kicks off<br>${kickText(DATA.nextKick)}` : `Season starts<br>Week 1`)
     : (DATA.isLive && LIVE)
-    ? `<span style="color:var(--live);font-weight:600">Week ${LIVE.week} live</span><br>Updated ${stampTime(DATA.generated)}`
-    : `Through Week ${DATA.throughWeek}<br>Updated ${stampTime(DATA.generated)}`;
+    ? `<span style="color:var(--live);font-weight:600">${esc(wkName(LIVE.week))} live</span><br>Updated ${stampTime(DATA.generated)}`
+    : `${wkThru(DATA.throughWeek)}<br>Updated ${stampTime(DATA.generated)}`;
 
   $('#potPct').textContent = money(M.awarded);
   $('#segA').style.width = (M.awarded/M.pot*100).toFixed(2)+'%';
@@ -397,7 +416,7 @@ function standings(){
   const rankText = i => shared[place[i]] > 1 ? 'T' + place[i] : String(place[i]);
 
   return `
-  <div class="sec"><h2>Standings</h2><span class="note">${PRE ? "Before Week 1" : "Through Week "+DATA.throughWeek}</span></div>
+  <div class="sec"><h2>Standings</h2><span class="note">${PRE ? "Before Week 1" : wkThru(DATA.throughWeek)}</span></div>
   <div class="list">` + rows.map((o,i)=>{
     const pct = Math.round(o.won / M.buyIn * 100);
     return `<button class="row" data-goowner="${esc(o.name)}">
@@ -465,7 +484,7 @@ function ownerPanel(){
     const w = l.winners.filter(x=>x.owner===o.name && x.amount>0);
     const amt = w.reduce((s,x)=>s+x.amount,0);
     return `<div class="row">
-      <span class="rank">${l.week}</span>
+      ${rankCell(l.week)}
       <span class="main"><span class="nm" style="font-size:13px">${esc(l.prize)}${l.split?' <span style="color:var(--live);font-weight:500;font-size:11px">shared</span>':''}</span>
       <span class="sub">${w.map(x=>(x.abbr?chipHTML(x.abbr)+' ':'')+esc(x.detail||l.detail)).join('<br>')}</span></span>
       <span class="amt g">${money(amt)}</span></div>`;
@@ -487,15 +506,24 @@ function weekPanel(){
   const wk = DATA.ledger.filter(l=>l.week===w && ORDER7.includes(l.prize));
   const total = wk.reduce((s,l)=>s+l.amount,0);
   const last = (DATA.isLive && LIVE) ? LIVE.week : DATA.throughWeek;
-  const weeks = []; for(let i=1;i<=last;i++) weeks.push(i);
 
+  /* Regular weeks up to wherever we are, then any playoff round the bracket
+     has actually produced. Before the bracket is set there are no round pills
+     to show, which is correct: those games do not exist yet. */
+  const weeks = [];
+  for (let i = 1; i <= Math.min(last, REG_WEEKS); i++) weeks.push(i);
+  (DATA.post || []).forEach(r => { if (r.week <= last) weeks.push(r.week); });
+
+  const rd = (DATA.post || []).find(r => r.week === w);
   const head = `
   <div class="segbar">${weeks.map(i=>
-    `<button class="pill mini" data-week="${i}" aria-pressed="${i===w}">W${i}</button>`).join('')}</div>
-  <div class="sec"><h2>Week ${w}</h2>
+    `<button class="pill mini" data-week="${i}" aria-pressed="${i===w}">${wkPill(i)}</button>`).join('')}</div>
+  <div class="sec"><h2>${esc(wkName(w))}</h2>
     <span>${live
       ? `<span class="tag live">Live · ${LIVE.gamesFinal} of ${LIVE.gamesTotal} final</span>`
       : '<span class="tag final">Final</span>'}</span></div>`;
+
+  if (rd) return head + postRound(rd, live);
 
   if (live) return head + `
   <div class="list">${LIVE.prizes.map(p=>`
@@ -528,6 +556,59 @@ function weekPanel(){
   <div class="row"><span class="main"><span class="nm" style="font-size:13px;color:var(--dim)">Week ${w} total</span></span>
     <span class="amt">${money(total)}</span></div></div>
   <div class="foot">Seven prizes every week, ${money(3800)} in total. A week can pay more than that when a prize carried in from an earlier week, which is why Price Check and Upset sometimes look large.</div>`;
+}
+
+/* One playoff round: every game in it, and what each knocked-out team earned
+   its owner. The ladder is the only thing being played for here, since the
+   seven weekly prizes stop at Week 18. */
+function postRound(r, live){
+  const kick = g => g.kick ? kickText(g.kick) : 'Kickoff to be set';
+  /* A score only exists once a game is final. Showing one before that would
+     be inventing a result. */
+  const side = (abbr, score, final, won) => `<span style="display:inline-flex;align-items:center;gap:6px">
+      ${chipHTML(abbr)}<b style="font-family:var(--mono);font-size:13px;font-weight:${won?600:400};
+        color:${won?'var(--tx)':'var(--dim)'};min-width:18px;display:inline-block">${
+        final && score !== null && score !== undefined ? score : ''}</b></span>`;
+
+  const SB = r.week === 22;
+  const stake = SB ? r.champion : r.perTeam;
+
+  const html = `
+  <div class="list">${r.games.map(g=>{
+    const paid = g.pays.reduce((s,p)=>s+p.amount,0);
+    return `<div class="row"><span class="main">
+      <span class="nm" style="font-size:13.5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        ${side(g.away, g.aScore, g.final, g.final && g.winner===g.away)}
+        <span style="color:var(--faint);font-weight:400;font-size:11.5px">at</span>
+        ${side(g.home, g.hScore, g.final, g.final && g.winner===g.home)}</span>
+      ${g.final
+        ? g.pays.map(p=>`<span class="wl">${chipHTML(p.team)}
+            <b>${esc((TEAM[p.team]||{}).owner || '')}</b>
+            <span class="amt2">${money(p.amount)}</span>
+            <span>${esc(p.why)}</span></span>`).join('')
+        : `<span class="sub">${esc(kick(g))}${SB
+            ? ', ' + money(r.perTeam) + ' to the runner-up' : ''}</span>`}</span>
+      <span class="amt ${g.final && r.settled ? 'g' : ''}" style="${
+        g.final && r.settled ? '' : 'color:var(--live)'}">${
+        g.final ? money(paid) : money(stake)}<small>${
+        g.final ? (r.settled ? '' : 'not yet paid')
+                : (SB ? 'to the winner' : 'to the loser')}</small></span></div>`;
+  }).join('')}
+  <div class="row"><span class="main"><span class="nm" style="font-size:13px;color:var(--dim)">${
+    esc(r.label)} round total</span></span>
+    <span class="amt">${money(r.settled ? r.paid : r.amount)}</span></div></div>`;
+  const T = DATA.postTiers || {};
+  return html + `
+  <div class="foot">${r.settled
+    ? `The ${esc(r.label)} round is settled and paid.`
+    : `Nothing in this round pays until every game in it is final, the same rule the regular weeks follow.`}
+  The ladder pays fourteen teams in all: <b>${money(T.champion)}</b> to the champion,
+  <b>${money(T['22'])}</b> to the runner-up, <b>${money(T['21'])}</b> to each conference loser,
+  <b>${money(T['20'])}</b> to each divisional loser and <b>${money(T['19'])}</b> to each wild card
+  loser. That is the ${money(DATA.postPool)} postseason pool${DATA.postRolled
+    ? `, which includes <b>${money(DATA.postRolled)}</b> rolled in from novelty prizes that were never
+       triggered by the end of Week 18 and now pay on these same percentages`
+    : ', forty per cent of the whole pot'}.</div>`;
 }
 
 /* The rule behind each prize, so nobody has to open the rule book. Wording
@@ -576,9 +657,9 @@ const RULE = {
  'QB Down': ['$101, once.',
    'The first starting quarterback ruled out for the season, from Week 1 kickoff to the end of Week 18. Entered by hand once the team confirms it.',
    'Same-day rulings split it.'],
- 'Postseason ladder': ['$1,000, after the Super Bowl.',
-   'Every one of the fourteen playoff teams pays its owner, from $250 for the champion down to $25 for a wild card round loss.',
-   'No ties are possible, so nothing splits.']
+ 'Postseason ladder': ['PLACEHOLDER',
+   'Every one of the fourteen playoff teams pays its owner for the round it goes out in: $250 to the champion, $140 to the runner-up, $100 to each conference loser, $65 to each divisional loser, $25 to each wild card loser.',
+   'A round pays only once every game in it is final. No ties are possible, so nothing splits.']
 };
 
 /* ---------------------------------------------------------------- prizes */
@@ -641,7 +722,7 @@ function prizePanel(){
     `<button class="pill mini" data-prize="${esc(n)}" aria-pressed="${n===state.prize}">${esc(n)}</button>`).join('')}</div>
   <div class="sec"><h2>${esc(state.prize)}</h2><span class="note">${money(tot)} paid</span></div>
   <div class="list">${rows.map(l=>`
-    <div class="row"><span class="rank">${l.week}</span>
+    <div class="row">${rankCell(l.week)}
       <span class="main">${l.split?`<span class="shared">Shared ${l.winners.length} ways</span>`:''}
         ${winnerLines(l,true)}</span>
       <span class="amt g">${money(l.amount)}</span></div>`).join('')}</div>
@@ -795,6 +876,19 @@ function adopt(board, first){
   const last = (board.isLive && LIVE) ? LIVE.week : board.throughWeek;
   if (first || state.week > last) state.week = Math.max(1, last);
   if (first) state.prizeMode = board.ledger.length ? 'awarded' : 'pending';
+
+  /* The ladder's own rule line has to quote the real pool, because untriggered
+     novelty money moves into it at the end of Week 18 and every tier grows. */
+  const T = board.postTiers || {};
+  if (T.champion) RULE['Postseason ladder'] = [
+    `${money(board.postPool)}, paid round by round.`,
+    `Every one of the fourteen playoff teams pays its owner for the round it goes out in: `
+      + `${money(T.champion)} to the champion, ${money(T['22'])} to the runner-up, `
+      + `${money(T['21'])} to each conference loser, ${money(T['20'])} to each divisional loser, `
+      + `${money(T['19'])} to each wild card loser.`
+      + (board.postRolled ? ` The pool grew by ${money(board.postRolled)} because that much novelty
+         prize money was never triggered by the end of Week 18.` : ''),
+    'A round pays only once every game in it is final. No ties are possible, so nothing splits.'];
 
   drawHeader();
   renderAll();
