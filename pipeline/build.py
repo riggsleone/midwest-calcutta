@@ -7,7 +7,7 @@ Inputs are stored, outputs are recomputed. Every prize is derived from the
 games every time, so fixing a rule fixes the whole season at once.
 """
 import sys, json, os, datetime
-import distill, prizes, validate, league, teams
+import distill, prizes, validate, league, teams, schedule
 from fetch import fetch_pbp
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -77,32 +77,62 @@ def split_owner(amount, who):
     return [(o, base + (1 if i < rem else 0)) for i, o in enumerate(who)]
 
 
-def build_board(games, auction, prices, owners, manual, season):
-    played = sorted({g["week"] for g in games})
-    last = max(played) if played else 0
+def settle_point(games, sched):
+    """How far the board can be paid, and which week is live.
+
+    A week is settled only when the schedule says every game is final AND we
+    actually hold play-by-play for all of them. Play-by-play lags the final
+    whistle by a few minutes, and paying a week we cannot fully score would
+    hand somebody a prize on incomplete evidence.
+    """
+    have = {}
+    for g in games:
+        if g["final"]: have[g["week"]] = have.get(g["week"], 0) + 1
+    if not sched:
+        played = sorted({g["week"] for g in games})
+        return (max(played) if played else 0), None
+    through = 0
+    for w in range(1, WEEKS+1):
+        st = sched["weeks"].get(w)
+        if st and st["complete"] and have.get(w, 0) >= st["total"]:
+            through = w
+        else:
+            break
+    # the live week is always the one after the last settled week, and only
+    # once it has actually kicked off. Between the final whistle and the next
+    # kickoff there is no live week at all.
+    nxt = sched["weeks"].get(through + 1)
+    live = (through + 1) if (nxt and nxt["started"]) else None
+    return through, live
+
+
+def build_board(games, auction, prices, owners, manual, season, sched=None):
+    through, live_w = settle_point(games, sched)
+    last = through
+    settled = [g for g in games if g["final"] and g["week"] <= through]
     ledger, carries = [], {}
 
     # ---- the seven weekly prizes, week by week, carries flowing forward
     for w in range(1, last+1):
-        if not any(g["week"] == w for g in games): continue
+        if not any(g["week"] == w for g in settled): continue
         pre = {}
-        r = records(games, w-1)
+        r = records(settled, w-1)
         for t, x in r.items():
             n = x["w"] + x["l"] + x["t"]
             if n: pre[t] = (x["w"] + 0.5*x["t"]) / n
-        ctx = prizes.Ctx(games, owners, prices)
+        ctx = prizes.Ctx(settled, owners, prices)
         awards, carries = prizes.run_week(ctx, w, carries, pre)
         ledger += awards
 
     # ---- win bounty, $1 a win, credited per team
-    rec = records(games, last)
+    rec = records(settled, last)
     bounty = {a: rec[a]["w"]*100 + int(rec[a]["t"]*50) for a in teams.TEAMS}
 
     # ---- mini-seasons, settled only once their window has completed
     ms_tables = {}
     for n, (lo, hi, amt) in MINI.items():
         if last < hi: continue
-        pct, table, mrec, rank = mini_season(games, owners, lo, hi)
+        pct, table, mrec, rank = mini_season(settled, owners, lo, hi)
         ms_tables[f"Mini-Season {n}"] = {"n":n,"lo":lo,"hi":hi,"final":True,"rows":table}
         best = max(rank(o) for o in pct)
         win = [o for o in pct if rank(o) == best]
@@ -119,7 +149,7 @@ def build_board(games, auction, prices, owners, manual, season):
 
     # ---- novelty settled at the end of the regular season
     if last >= WEEKS:
-        hi_g = max(games, key=lambda g: max(g["home_score"], g["away_score"]))
+        hi_g = max(settled, key=lambda g: max(g["home_score"], g["away_score"]))
         ht = hi_g["home"] if hi_g["home_score"] >= hi_g["away_score"] else hi_g["away"]
         pts = max(hi_g["home_score"], hi_g["away_score"])
         ledger.append({"week":WEEKS, "prize":"Highest single-game score",
@@ -172,12 +202,56 @@ def build_board(games, auction, prices, owners, manual, season):
 
     won = {o: sum(cat[o].values()) for o in who}
     awarded = sum(won.values())
-    weekly_left = max(0, (WEEKS - last)) * 3800
-    bounty_left = max(0, 27200 - sum(bounty.values()))
+
+    # ---- the live week, if one is in progress
+    # Leaders only, computed from the games already final. Nothing here is paid
+    # and nothing here counts in the standings until the last game goes final.
+    live, in_play, dead_amt = None, 0, 0
+    if live_w:
+        pre = {}
+        r0 = records(settled, live_w-1)
+        for t, x in r0.items():
+            n = x["w"] + x["l"] + x["t"]
+            if n: pre[t] = (x["w"] + 0.5*x["t"]) / n
+        lg = [g for g in games if g["week"] == live_w and g["final"]]
+        lctx = prizes.Ctx(lg, owners, prices)
+        lawards, _ = prizes.run_week(lctx, live_w, carries, pre)
+        by = {a["prize"]: a for a in lawards}
+        plist = []
+        for name, face in prizes.WEEKLY.items():
+            a = by.get(name)
+            # Week 1 Upset cannot be won, because every team goes in 0-0.
+            # Showing it as money in play would overstate the bar by $5.
+            dead = (name == "Upset of the Week" and live_w == 1)
+            plist.append({"prize":name,
+                "amount": a["amount"] if a else face + carries.get(name, 0),
+                "carry": dead,
+                "note": ("Nobody can win this in Week 1, because every team "
+                         "starts 0-0. It carries into Week 2.") if dead else None,
+                "leaders":[{"abbr":x["team"], "owner":x["owner"], "why":x["detail"]}
+                           for x in (a["winners"] if a else [])]})
+        lbounty = 0
+        for g in lg:
+            for t, s, o in ((g["home"],g["home_score"],g["away_score"]),
+                            (g["away"],g["away_score"],g["home_score"])):
+                if not owners.get(t): continue
+                if   s > o:  lbounty += prizes.BOUNTY_PER_WIN
+                elif s == o: lbounty += prizes.BOUNTY_PER_WIN // 2
+        st = sched["weeks"][live_w]
+        live = {"week":live_w, "started":True, "gamesTotal":st["total"],
+                "gamesFinal":len(lg), "bounty":lbounty, "prizes":plist}
+        in_play = sum(p["amount"] for p in plist if not p["carry"]) + lbounty
+        dead_amt = sum(p["amount"] for p in plist if p["carry"])
+
+    # weeks not yet started, plus any carry that is not already in play
+    from_wk = live_w if live_w else last
+    weekly_left = (max(0, WEEKS - from_wk) * 3800
+                   + (dead_amt if live_w else sum(carries.values())))
+    bounty_left = max(0, 27200 - sum(bounty.values()) - (live["bounty"] if live else 0))
 
     # ---- what is still to come, with live leaders where they exist
-    hi_g = max(games, key=lambda g: max(g["home_score"], g["away_score"])) if games else None
-    bot = min(teams.TEAMS, key=lambda a:(rec[a]["w"], rec[a]["pf"]-rec[a]["pa"])) if games else None
+    hi_g = max(settled, key=lambda g: max(g["home_score"], g["away_score"])) if settled else None
+    bot = min(teams.TEAMS, key=lambda a:(rec[a]["w"], rec[a]["pf"]-rec[a]["pa"])) if settled else None
     ht2 = None
     done_prizes = {l["prize"] for l in ledger}
     pending = []
@@ -190,7 +264,7 @@ def build_board(games, auction, prices, owners, manual, season):
         if f"Mini-Season {n}" in done_prizes: continue
         if last >= lo:
             thru = min(last, hi)
-            pct, table, mr, rank = mini_season(games, owners, lo, thru)
+            pct, table, mr, rank = mini_season(settled, owners, lo, thru)
             ms_tables[f"Mini-Season {n}"] = {"n":n,"lo":lo,"hi":hi,"thru":thru,
                                              "final":False,"rows":table}
             b = max(rank(o) for o in pct); ldr = [o for o in pct if rank(o) == b]
@@ -202,19 +276,21 @@ def build_board(games, auction, prices, owners, manual, season):
              f"Weeks {lo} to {hi}, best combined win percentage")
     pend("Highest single-game score",10100,"End of Week 18",
          (f"{ht2} {max(hi_g['home_score'],hi_g['away_score'])}, Week {hi_g['week']} "
-          f"({owners.get(ht2)})" if games and (ht2:=(hi_g['home'] if hi_g['home_score']>=hi_g['away_score'] else hi_g['away'])) else "Not started"),
+          f"({owners.get(ht2)})" if settled and (ht2:=(hi_g['home'] if hi_g['home_score']>=hi_g['away_score'] else hi_g['away'])) else "Not started"),
          "Most points by one team in one game, full regular season")
     pend("QB Down",10100,"When triggered","Not triggered",
          "Season-ending IR or ruled out for the year. Entered by hand.")
     pend("The Pink Slip",10100,"When triggered","Not triggered",
          "First head coach fired or mutually parted with. Entered by hand.")
     pend("Bottom of the Barrel",7200,"End of Week 18",
-         (f"{bot} {rec[bot]['w']}-{rec[bot]['l']} ({owners.get(bot)})" if games else "Not started"),
+         (f"{bot} {rec[bot]['w']}-{rec[bot]['l']} ({owners.get(bot)})" if settled else "Not started"),
          "Worst regular season record, ties broken on point differential")
 
-    in_play = 0     # set by the caller when a week is live
     board = {
-      "season":season, "throughWeek":last, "isLive":False,
+      "season":season, "throughWeek":last, "isLive":bool(live),
+      "liveWeek":live,
+      "nextKick":(sched["nextKick"].strftime("%Y-%m-%dT%H:%M:%SZ")
+                  if sched and sched.get("nextKick") else None),
       "generated":datetime.datetime.now(datetime.timezone.utc)
                      .strftime("%Y-%m-%dT%H:%M:%SZ"),
       "meta":{"pot":POT,"buyIn":BUYIN,"awarded":awarded,"inPlay":in_play,
@@ -239,12 +315,68 @@ def build_board(games, auction, prices, owners, manual, season):
     return board
 
 
+def load_prev(season):
+    """The board as it was last written, for the freeze check and the skip."""
+    path = os.path.join(DATA, "board.json")
+    if not os.path.exists(path): return None
+    try:
+        b = json.load(open(path))
+        return b if b.get("season") == season else None
+    except Exception:
+        return None
+
+
+def quiet(sched, prev):
+    """True when nothing can possibly have changed since the last write.
+
+    No week is in progress, and the schedule has not finished a week beyond
+    the one the board already covers. Lets the scheduled job run often and
+    cheaply without downloading a season of play-by-play every time.
+    """
+    if prev.get("isLive"): return False
+    done = [w for w, st in sched["weeks"].items() if st["complete"]]
+    if (max(done) if done else 0) > prev.get("throughWeek", 0): return False
+    nxt = sched["weeks"].get(prev.get("throughWeek", 0) + 1)
+    return not (nxt and nxt["started"])
+
+
 def main():
     season = int(sys.argv[1]) if len(sys.argv) > 1 else 2026
     auction, prices, owners = league.load()
     errs = validate.check_league(sorted(prices), owners, prices)
     if errs:
         print("AUCTION FAILED VALIDATION:"); [print("  !",e) for e in errs]; sys.exit(1)
+
+    force = os.environ.get("CALCUTTA_FORCE") == "1"
+    prev = load_prev(season)
+
+    # The schedule comes first, and it is small. It says how many games a week
+    # is supposed to have and which are actually over. Without it we cannot tell
+    # a halftime lead from a win, so a failure here means nothing new gets paid.
+    try:
+        # CALCUTTA_NOW lets us replay any moment of any season to check the
+        # live-week behaviour without waiting for a Sunday.
+        fake = os.environ.get("CALCUTTA_NOW")
+        now = (datetime.datetime.fromisoformat(fake).replace(
+                   tzinfo=datetime.timezone.utc) if fake else None)
+        raw = schedule.fetch(season)
+        if now: raw = schedule.rewind(raw, now)
+        sched = schedule.read(raw, now)
+        print(f"schedule {len(sched['finalIds'])} of "
+              f"{sum(s['total'] for s in sched['weeks'].values())} games final")
+        if sched["nextKick"]:
+            print(f"next kick {sched['nextKick'].astimezone(schedule.ET):%a %b %-d, %-I:%M%p ET}")
+    except Exception as e:
+        sched = None
+        print(f"WARNING  schedule unavailable ({type(e).__name__}: {e}).")
+        print("WARNING  falling back to play-by-play only. No live week this run.")
+
+    # Nothing is live and nothing new has finished since the board was last
+    # written, so there is no reason to pull a hundred megabytes of play-by-play.
+    if sched and prev and not force and quiet(sched, prev):
+        print(f"\nnothing to do. No game is in progress and the board is already "
+              f"current through Week {prev['throughWeek']}.")
+        return
 
     try:
         rows, url, missing = fetch_pbp(season, distill.COLS)
@@ -258,8 +390,30 @@ def main():
     unknown = sorted(seen - set(owners))
     if unknown:
         print(f"UNKNOWN TEAM ABBREVIATIONS: {unknown}"); sys.exit(1)
+    for g in games:
+        g["final"] = (g["game_id"] in sched["finalIds"]) if sched else True
 
-    board = build_board(games, auction, prices, owners, load_manual(), season)
+    board = build_board(games, auction, prices, owners, load_manual(), season, sched)
+
+    # A week that has been settled must never quietly change. If an upstream
+    # correction moves one, stop and say so rather than restating the board
+    # under everybody without telling them.
+    if prev and prev.get("season") == season and prev.get("ledger"):
+        weeks = set(range(1, min(prev["throughWeek"], board["throughWeek"]) + 1))
+        ferrs = validate.check_frozen(prev["ledger"], board["ledger"], weeks)
+        if ferrs and not force:
+            print("\nA SETTLED WEEK CHANGED. Nothing was written.")
+            for e in ferrs: print("  !", e)
+            print("\nThis usually means a stat correction upstream. Review it, then")
+            print("re-run with 'Allow a settled week to change' ticked to accept it.")
+            sys.exit(1)
+        if ferrs:
+            print("\nACCEPTING a change to settled weeks, because it was forced:")
+            for e in ferrs: print("  !", e)
+    if board["isLive"]:
+        lw = board["liveWeek"]
+        print(f"LIVE     week {lw['week']}, {lw['gamesFinal']} of {lw['gamesTotal']} final, "
+              f"${board['meta']['inPlay']/100:,.2f} in play")
 
     errs = validate.check_awards(board["ledger"])
     if errs:
@@ -288,6 +442,8 @@ def main():
     print(f"  mini-seasons    ${mini/100:>9,.2f}")
     print(f"  novelty         ${nov/100:>9,.2f}")
     print(f"  AWARDED         ${m['awarded']/100:>9,.2f}")
+    if m["inPlay"]:
+        print(f"  in play now     ${m['inPlay']/100:>9,.2f}   week {board['liveWeek']['week']}, not yet paid")
     print(f"  still to come   ${m['stillToCome']/100:>9,.2f}")
     print(f"  POT             ${m['pot']/100:>9,.2f}")
     assert weekly + bounty + mini + nov == m["awarded"], "categories must tie"
@@ -309,6 +465,15 @@ def main():
         amt = tot(lambda l, p=p: l["prize"] == p)
         flag = "" if n == 18 else f"   <- {18-n} week(s) carried"
         print(f"  {p:<24}{n:>3}   ${amt/100:>7,.2f}{flag}")
+
+    if board["isLive"]:
+        lw = board["liveWeek"]
+        print(f"\nWEEK {lw['week']} LEADING, NOTHING PAID YET")
+        for p in lw["prizes"]:
+            who = (", ".join(f"{x['abbr']} {x['owner']}" for x in p["leaders"])
+                   or ("carries into next week" if p["carry"] else "nothing qualifies yet"))
+            print(f"  {p['prize']:<24}${p['amount']/100:>7,.2f}   {who}")
+        print(f"  {'win bounty so far':<24}${lw['bounty']/100:>7,.2f}")
 
     print("\nSTILL TO COME")
     for p in board["pending"]:
