@@ -256,13 +256,56 @@ def main():
         json.dump(board, f, separators=(",",":"))
 
     m = board["meta"]
-    print(f"season {season}  |  {len(games)} games  |  through week {board['throughWeek']}")
-    print(f"awarded ${m['awarded']/100:,.2f}   still to come ${m['stillToCome']/100:,.2f}"
-          f"   pot ${m['pot']/100:,.2f}")
+    L = board["ledger"]
+    print(f"\nseason {season}  |  {len(games)} games  |  through week {board['throughWeek']}"
+          f"  |  {len(L)} awards")
+
+    # ---- where the money went, by category
+    def tot(pred): return sum(l["amount"] for l in L if pred(l))
+    weekly = tot(lambda l: l["prize"] in prizes.WEEKLY)
+    mini   = tot(lambda l: l["prize"].startswith("Mini-Season"))
+    nov    = tot(lambda l: l["prize"] in NOVELTY)
+    bounty = sum(c["bounty"] for c in board["cat"].values())
+    print("\nWHERE THE POT WENT")
+    print(f"  weekly prizes   ${weekly/100:>9,.2f}   {sum(1 for l in L if l['prize'] in prizes.WEEKLY)} awards")
+    print(f"  win bounty      ${bounty/100:>9,.2f}   $1 a win")
+    print(f"  mini-seasons    ${mini/100:>9,.2f}")
+    print(f"  novelty         ${nov/100:>9,.2f}")
+    print(f"  AWARDED         ${m['awarded']/100:>9,.2f}")
+    print(f"  still to come   ${m['stillToCome']/100:>9,.2f}")
+    print(f"  POT             ${m['pot']/100:>9,.2f}")
+    assert weekly + bounty + mini + nov == m["awarded"], "categories must tie"
     assert m["awarded"] + m["inPlay"] + m["stillToCome"] == POT
-    print(f"{len(board['ledger'])} awards written")
-    for o in sorted(board["owners"], key=lambda x:-x["won"]):
-        print(f"   {o['name']:<7} ${o['won']/100:>8,.2f}")
+
+    # ---- the prizes people will ask about by name
+    named = [l for l in L if l["prize"] not in prizes.WEEKLY]
+    if named:
+        print("\nTHE BIG ONES")
+        for l in sorted(named, key=lambda x: (x["week"], x["prize"])):
+            who = ", ".join(f"{x['owner']} ${x['amount']/100:,.2f}" for x in l["winners"])
+            print(f"  wk{l['week']:<3}{l['prize']:<28}{who}")
+            print(f"      {'':28}{l['winners'][0]['detail']}")
+
+    # ---- how many times each weekly prize actually paid
+    print("\nWEEKLY PRIZES, TIMES PAID OUT OF 18")
+    for p in prizes.WEEKLY:
+        n = sum(1 for l in L if l["prize"] == p)
+        amt = tot(lambda l, p=p: l["prize"] == p)
+        flag = "" if n == 18 else f"   <- {18-n} week(s) carried"
+        print(f"  {p:<24}{n:>3}   ${amt/100:>7,.2f}{flag}")
+
+    print("\nSTILL TO COME")
+    for p in board["pending"]:
+        print(f"  {p['prize']:<28}${p['amount']/100:>9,.2f}   {p['lead']}")
+    if m["weeklyLeft"]: print(f"  {'weekly prizes not yet played':<28}${m['weeklyLeft']/100:>9,.2f}")
+    if m["bountyLeft"]: print(f"  {'win bounty not yet played':<28}${m['bountyLeft']/100:>9,.2f}")
+
+    print("\nSTANDINGS")
+    for i, o in enumerate(sorted(board["owners"], key=lambda x:-x["won"]), 1):
+        c = board["cat"][o["name"]]
+        print(f"  {i:>2}. {o['name']:<7} ${o['won']/100:>8,.2f}   "
+              f"weekly ${c['weekly']/100:>6,.2f}  bounty ${c['bounty']/100:>6,.2f}  "
+              f"mini ${c['mini']/100:>5,.2f}  novelty ${c['novelty']/100:>6,.2f}")
 
 if __name__ == "__main__":
     main()
