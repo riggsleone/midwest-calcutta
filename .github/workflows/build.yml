@@ -1,0 +1,42 @@
+name: Build the board
+on:
+  workflow_dispatch:
+    inputs:
+      season: {description: "Season", default: "2026", required: true}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+
+      - name: Build board.json
+        shell: bash
+        run: |
+          set -o pipefail
+          cd pipeline
+          python build.py "${{ inputs.season }}" 2>&1 | tee build_report.txt
+
+      - name: Show the report
+        if: always()
+        run: |
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat pipeline/build_report.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Commit the data if it changed
+        run: |
+          git config user.name  "calcutta-bot"
+          git config user.email "calcutta-bot@users.noreply.github.com"
+          git add data/board.json data/games.json
+          if git diff --staged --quiet; then
+            echo "nothing changed"
+          else
+            git commit -m "board: season ${{ inputs.season }} refresh"
+            git push
+          fi
