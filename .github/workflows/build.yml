@@ -1,9 +1,6 @@
 name: Build the board
 
 on:
-  # Every twenty minutes. The job checks the schedule first, which is small,
-  # and stops right there unless a game is in progress or a week has just
-  # finished. So most of these runs cost a few seconds and change nothing.
   schedule:
     - cron: "*/20 * * * *"
   workflow_dispatch:
@@ -22,40 +19,64 @@ permissions:
 
 concurrency:
   group: build-the-board
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
 
-      - name: Build board.json
+      - name: Build the board, and keep building while a week is live
         shell: bash
         env:
           CALCUTTA_FORCE: ${{ inputs.force == true && '1' || '0' }}
+          SEASON: ${{ inputs.season || '2026' }}
         run: |
-          set -o pipefail
-          cd pipeline
-          python build.py "${{ inputs.season || '2026' }}" 2>&1 | tee build_report.txt
+          git config user.name  "calcutta-bot"
+          git config user.email "calcutta-bot@users.noreply.github.com"
 
-      - name: Show the report
+          EVERY=300
+          DEADLINE=$(( $(date +%s) + 19500 ))
+          PASS=0
+
+          while : ; do
+            PASS=$((PASS+1))
+            echo "::group::pass $PASS  $(date -u '+%H:%M:%SZ')"
+            if ! (cd pipeline && python build.py "$SEASON" 2>&1 | tee build_report.txt); then
+              echo "::endgroup::"
+              echo "build failed on pass $PASS"
+              exit 1
+            fi
+            echo "::endgroup::"
+
+            git add data/board.json data/games.json
+            if git diff --staged --quiet; then
+              echo "nothing changed"
+            else
+              git commit -m "board: season $SEASON refresh"
+              git push || { git pull --rebase --autostash && git push; }
+            fi
+
+            LIVE=$(python -c "import json;print(json.load(open('data/board.json')).get('isLive'))")
+            if [ "$LIVE" != "True" ]; then
+              echo "no week in progress. Done after $PASS pass(es)."
+              break
+            fi
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "time is up. The next run picks it up from here."
+              break
+            fi
+            echo "a week is live. Rebuilding in $((EVERY/60)) minutes."
+            sleep "$EVERY"
+          done
+
+      - name: Show the last report
         if: always()
         run: |
           echo '```' >> $GITHUB_STEP_SUMMARY
           cat pipeline/build_report.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-
-      - name: Commit the data if it changed
-        run: |
-          git config user.name  "calcutta-bot"
-          git config user.email "calcutta-bot@users.noreply.github.com"
-          git add data/board.json data/games.json
-          if git diff --staged --quiet; then
-            echo "nothing changed"
-          else
-            git commit -m "board: season ${{ inputs.season || '2026' }} refresh"
-            git push
-          fi
