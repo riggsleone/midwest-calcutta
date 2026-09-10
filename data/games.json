@@ -1,1 +1,1 @@
-{"season":2026,"source":null,"games":[]}
+{"season":2026,"source":"https://github.com/nflverse/nflverse-data/releases/download/pbp/play_by_play_2026.csv.gz","games":[{"game_id":"2026_01_NE_SEA","season":2026,"week":1,"home":"SEA","away":"NE","home_score":13,"away_score":10,"final":true,"fg":{"SEA":2,"NE":1},"fg_yards":{"SEA":56,"NE":50},"long_td":{"SEA":45,"NE":2}}]}
