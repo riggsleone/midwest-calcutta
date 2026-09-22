@@ -1,5 +1,22 @@
 name: Build the board
 
+# GitHub treats scheduled jobs as best effort, not a promise. In practice a
+# "*/20" schedule on a free public repo lands every two or three hours, which
+# is fine on a Tuesday and useless on a Sunday afternoon.
+#
+# So the schedule is only used to START the job, and the job does its own
+# timing once it is running. If a week is live it rebuilds every five minutes
+# until the week goes final or it runs out of time and hands over to the next
+# firing. If nothing is live it checks once and exits in a few seconds.
+#
+# A push can fail for reasons that have nothing to do with us. On 2026-09-13
+# GitHub answered two pushes five seconds apart with "Internal Server Error"
+# and the whole loop died, freezing the board until the next firing hours
+# later. On 2026-09-21 two runs overlapped and a rebase left merge-conflict
+# markers inside board.json. Neither should cost us an afternoon, so a push
+# retries with backoff, never merges the generated files, and a pass that
+# still cannot push keeps the loop alive and tries again next time round.
+
 on:
   schedule:
     - cron: "*/20 * * * *"
@@ -19,6 +36,8 @@ permissions:
 
 concurrency:
   group: build-the-board
+  # a newer run replaces an older one, so a loop that is still going gets
+  # taken over cleanly rather than queueing behind it
   cancel-in-progress: true
 
 jobs:
@@ -36,12 +55,52 @@ jobs:
           CALCUTTA_FORCE: ${{ inputs.force == true && '1' || '0' }}
           SEASON: ${{ inputs.season || '2026' }}
         run: |
+          # Without this the exit status of "build.py | tee" is tee's, which is
+          # always 0, so a failing build would look like a clean one.
+          set -o pipefail
+
           git config user.name  "calcutta-bot"
           git config user.email "calcutta-bot@users.noreply.github.com"
 
-          EVERY=300
-          DEADLINE=$(( $(date +%s) + 19500 ))
+          EVERY=300                                   # five minutes
+          DEADLINE=$(( $(date +%s) + 19500 ))         # 5h25m, under the 6h limit
           PASS=0
+          PUSHFAIL=0                                  # consecutive passes that could not push
+
+          # Push, retrying a few times with growing gaps. Covers both a
+          # transient server error and the branch having moved on underneath us.
+          #
+          # board.json and games.json are generated, never edited, so they are
+          # never merged. When the remote has moved on: keep the files we just
+          # built, reset to whatever the remote has, put ours on top, commit,
+          # and push again. Two builds seconds apart are interchangeable, and
+          # the next pass rebuilds anyway.
+          push_with_retry () {
+            local n=0
+            while : ; do
+              if git push ; then return 0 ; fi
+              n=$((n+1))
+              if [ "$n" -ge 5 ] ; then
+                echo "push failed $n times. Leaving the commit for the next pass."
+                return 1
+              fi
+              echo "push failed on attempt $n. Retrying in $((n*15))s."
+              sleep $((n*15))
+              cp data/board.json /tmp/board.keep
+              cp data/games.json /tmp/games.keep
+              git rebase --abort 2>/dev/null || true
+              git fetch origin
+              git reset --hard origin/main
+              cp /tmp/board.keep data/board.json
+              cp /tmp/games.keep data/games.json
+              git add data/board.json data/games.json
+              if git diff --staged --quiet ; then
+                echo "remote already has this build. Nothing to push."
+                return 0
+              fi
+              git commit -m "board: season $SEASON refresh"
+            done
+          }
 
           while : ; do
             PASS=$((PASS+1))
@@ -58,10 +117,27 @@ jobs:
               echo "nothing changed"
             else
               git commit -m "board: season $SEASON refresh"
-              git push || { git pull --rebase --autostash && git push; }
             fi
 
-            LIVE=$(python -c "import json;print(json.load(open('data/board.json')).get('isLive'))")
+            # Anything committed but not yet on the remote, including a commit
+            # an earlier pass could not push.
+            if [ -n "$(git log @{u}..HEAD --oneline 2>/dev/null)" ]; then
+              if push_with_retry ; then
+                PUSHFAIL=0
+              else
+                PUSHFAIL=$((PUSHFAIL+1))
+                echo "pass $PASS could not push. $PUSHFAIL consecutive failure(s)."
+                if [ "$PUSHFAIL" -ge 3 ] ; then
+                  echo "Three passes in a row could not reach GitHub. Stopping so this"
+                  echo "is not silent. Check githubstatus.com, then run this again."
+                  exit 1
+                fi
+              fi
+            fi
+
+            # Read the board we just built. If the file is somehow unreadable,
+            # treat it as live so the loop keeps going rather than dying.
+            LIVE=$(python -c "import json;print(json.load(open('data/board.json')).get('isLive'))" 2>/dev/null || echo "True")
             if [ "$LIVE" != "True" ]; then
               echo "no week in progress. Done after $PASS pass(es)."
               break
@@ -78,5 +154,6 @@ jobs:
         if: always()
         run: |
           echo '```' >> $GITHUB_STEP_SUMMARY
-          cat pipeline/build_report.txt >> $GITHUB_STEP_SUMMARY
+          cat pipeline/build_report.txt >> $GITHUB_STEP_SUMMARY 2>/dev/null \
+            || echo "(the build produced no report)" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
