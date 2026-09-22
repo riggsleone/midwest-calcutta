@@ -379,21 +379,58 @@ def build_board(games, auction, prices, owners, manual, season, sched=None):
         for t, x in r0.items():
             n = x["w"] + x["l"] + x["t"]
             if n: pre[t] = (x["w"] + 0.5*x["t"]) / n
-        lg = [g for g in games if g["week"] == live_w and g["final"]]
+        # Two sources, two speeds. The schedule carries a final score within
+        # minutes of the whistle. Play-by-play, which is the only place field
+        # goals and touchdown lengths live, can trail it by an hour or more on
+        # a Sunday afternoon (2026-09-13: six games final, play-by-play still
+        # showing two). Five of the seven prizes need only the score, so they
+        # are led off the schedule. Most Field Goals and Longest TD wait for
+        # the detail. Nothing here is paid; the week still settles only when
+        # play-by-play holds every game.
+        have_pbp = {g["game_id"]: g for g in games if g["week"] == live_w and g["final"]}
+        lg = []
+        for s in sched["games"]:
+            if s["week"] != live_w or not s["final"]: continue
+            if s["home_score"] is None or s["away_score"] is None: continue
+            p = have_pbp.get(s["game_id"])
+            if p:
+                lg.append(p)
+            else:
+                h, a = s["home"], s["away"]
+                lg.append({"game_id": s["game_id"], "week": live_w, "home": h, "away": a,
+                           "home_score": s["home_score"], "away_score": s["away_score"],
+                           "final": True, "fg": {h: 0, a: 0}, "fg_yards": {h: 0, a: 0},
+                           "long_td": {h: 0, a: 0}, "score_only": True})
+        lg_detail = [g for g in lg if not g.get("score_only")]
         lctx = prizes.Ctx(lg, owners, prices)
         lawards, _ = prizes.run_week(lctx, live_w, carries, pre)
         by = {a["prize"]: a for a in lawards}
+        # These two are re-run on the games that actually have play detail, so
+        # a score-only game never shows as "0 field goals" and hides a real leader.
+        dctx = prizes.Ctx(lg_detail, owners, prices)
+        for name, fn in (("Most Field Goals", prizes.most_fgs), ("Longest TD", prizes.longest_td)):
+            a = fn(dctx, live_w, carries.get(name, 0))
+            if a: by[name] = a
+            else: by.pop(name, None)
+        NEEDS_DETAIL = {"Most Field Goals", "Longest TD"}
+        lag = len(lg) - len(lg_detail)
         plist = []
         for name, face in prizes.WEEKLY.items():
             a = by.get(name)
             # Week 1 Upset cannot be won, because every team goes in 0-0.
             # Showing it as money in play would overstate the bar by $5.
             dead = (name == "Upset of the Week" and live_w == 1)
+            note = None
+            if dead:
+                note = ("Nobody can win this in Week 1, because every team "
+                        "starts 0-0. It carries into Week 2.")
+            elif name in NEEDS_DETAIL and lag:
+                note = (f"Play detail in for {len(lg_detail)} of {len(lg)} finished "
+                        f"game{'' if len(lg)==1 else 's'}. Updates as it arrives.")
             plist.append({"prize":name,
                 "amount": a["amount"] if a else face + carries.get(name, 0),
                 "carry": dead,
-                "note": ("Nobody can win this in Week 1, because every team "
-                         "starts 0-0. It carries into Week 2.") if dead else None,
+                "note": note,
                 "leaders":[{"abbr":x["team"], "owner":x["owner"], "why":x["detail"]}
                            for x in (a["winners"] if a else [])]})
         lbounty = 0
