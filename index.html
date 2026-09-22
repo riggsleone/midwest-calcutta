@@ -538,6 +538,7 @@ function weekPanel(){
       ${p.leaders.length>1?`<span class="shared">Tied ${p.leaders.length} ways, ${money(Math.floor(p.amount/p.leaders.length))} each</span>`:''}
       ${p.leaders.length ? p.leaders.map(x=>`<span class="wl">${chipHTML(x.abbr)}
           <b>${esc(x.owner)}</b><span>${esc(x.why)}</span></span>`).join('')
+          + (p.note ? `<span class="sub">${esc(p.note)}</span>` : '')
         : `<span class="sub">${p.note ? esc(p.note) : 'Nothing qualifies yet'}</span>`}</span>
       <span class="amt" style="color:${p.carry?'var(--faint)':'var(--live)'}">${money(p.amount)}<small>${p.carry?'carries forward':'not yet paid'}</small></span></div>`).join('')}
     <div class="row"><span class="main"><span class="nm" style="font-size:13px;color:var(--dim)">Win bounty so far</span>
