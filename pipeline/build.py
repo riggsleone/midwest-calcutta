@@ -37,6 +37,14 @@ def load_void():
     return [x for x in v if isinstance(x, str) and x.strip()]
 
 
+def manual_hash():
+    """A fingerprint of data/manual.json, so a change to it forces a rebuild."""
+    import hashlib
+    path = os.path.join(DATA, "manual.json")
+    if not os.path.exists(path): return None
+    return hashlib.sha256(open(path, "rb").read()).hexdigest()[:16]
+
+
 def load_manual(owners):
     """Read data/manual.json, the one file entered by hand.
 
@@ -535,6 +543,7 @@ def build_board(games, auction, prices, owners, manual, season, sched=None):
                   if sched and sched.get("nextKick") else None),
       "generated":datetime.datetime.now(datetime.timezone.utc)
                      .strftime("%Y-%m-%dT%H:%M:%SZ"),
+      "manualHash":manual_hash(),
       "meta":{"pot":POT,"buyIn":BUYIN,"awarded":awarded,"inPlay":in_play,
               "stillToCome":POT-awarded-in_play,
               "auctionSpend":auction["spend_cents"],
@@ -580,6 +589,11 @@ def quiet(sched, prev):
     cheaply without downloading a season of play-by-play every time.
     """
     if prev.get("isLive"): return False
+    # A hand-typed prize (Pink Slip, QB Down) arrives by editing manual.json.
+    # On 2026-09-23 the first QB Down was entered on a Wednesday and the build
+    # said "nothing to do" because no game was live. Money typed in must pay
+    # on the next run, not the next kickoff.
+    if manual_hash() != prev.get("manualHash"): return False
     done = [w for w, st in sched["weeks"].items() if st["complete"]]
     if (max(done) if done else 0) > prev.get("throughWeek", 0): return False
     nxt = sched["weeks"].get(prev.get("throughWeek", 0) + 1)
