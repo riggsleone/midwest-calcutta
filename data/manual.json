@@ -20,6 +20,15 @@
     "would freeze for the rest of the season. Put the game id in the list,",
     "for example \"2026_07_BUF_CIN\". Leave it empty unless it happens."
   ],
-  "entries": [],
+  "entries": [
+    {
+      "type": "QB Down",
+      "team": "NYG",
+      "date": "2026-09-23",
+      "week": 3,
+      "status": "confirmed",
+      "detail": "Jaxson Dart out for the season after knee surgery, reported Sept 23"
+    }
+  ],
   "void_games": []
 }
